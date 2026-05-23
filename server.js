@@ -59,6 +59,7 @@ app.get('/api/geocode', async (req, res) => {
       tz_offset: tzOffset
     });
   } catch (err) {
+    console.error('Geocode error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -88,16 +89,22 @@ app.post('/api/natal-chart', (req, res) => {
     const utHour = hour - tzOffset;
     const jd = julianDay(year, month, day, utHour, minute);
 
+    console.log('Natal chart request:', { year, month, day, utHour, minute, jd, lat, lng });
+
     // Calcolo posizioni con Swiss Ephemeris
+    // Flag 0 = eclittiche (longitudine zodiacale), NON equatoriali
+    const FLAG_ECLIPTIC = 0;
     const planets = [];
 
     // SOLE
-    const sun = swisseph.calc_ut(jd, swisseph.SE_SUN, swisseph.SE_EQUATORIAL);
+    const sun = swisseph.calc_ut(jd, swisseph.SE_SUN, FLAG_ECLIPTIC);
+    if (sun.error) throw new Error('Sun calc error: ' + sun.error);
     const sunLon = sun.longitude;
     planets.push({ key: 'sun', lon: sunLon });
 
     // LUNA
-    const moon = swisseph.calc_ut(jd, swisseph.SE_MOON, swisseph.SE_EQUATORIAL);
+    const moon = swisseph.calc_ut(jd, swisseph.SE_MOON, FLAG_ECLIPTIC);
+    if (moon.error) throw new Error('Moon calc error: ' + moon.error);
     const moonLon = moon.longitude;
     planets.push({ key: 'moon', lon: moonLon });
 
@@ -114,14 +121,21 @@ app.post('/api/natal-chart', (req, res) => {
     ];
 
     for (const p of bodies) {
-      const pos = swisseph.calc_ut(jd, p.id, swisseph.SE_EQUATORIAL);
+      const pos = swisseph.calc_ut(jd, p.id, FLAG_ECLIPTIC);
+      if (pos.error) {
+        console.warn('Planet calc error:', p.key, pos.error);
+        continue;
+      }
       planets.push({ key: p.key, lon: pos.longitude });
     }
 
     // Ascendente e MC (case Placidus)
-    const houses = swisseph.houses_ex(jd, lat, lng, 'P'); // 'P' = Placidus
-    const asc = houses.ascendant;
-    const mc = houses.mc;
+    // swisseph.houses() restituisce un array, NON un oggetto
+    const houses = swisseph.houses(jd, lat, lng, 'P'); // 'P' = Placidus
+    const asc = houses[0];   // ascendant
+    const mc = houses[1];    // MC (Medium Coeli)
+
+    console.log('Houses calculated:', { asc, mc });
 
     const response = {
       planets: planets.map(p => {
@@ -133,15 +147,38 @@ app.post('/api/natal-chart', (req, res) => {
       mc: toZodiac(mc)
     };
 
+    console.log('Chart response OK');
     res.json(response);
 
   } catch (err) {
+    console.error('Natal chart error:', err);
     res.status(500).json({ error: err.message, stack: err.stack });
   }
 });
 
+// ===== HEALTH CHECK =====
 app.get('/', (req, res) => {
   res.json({ status: 'ok', engine: 'swiss-ephemeris', precision: 'professional' });
+});
+
+// ===== SWISS EPHEMERIS TEST =====
+app.get('/api/test-ephemeris', (req, res) => {
+  try {
+    const jd = swisseph.julday(2000, 1, 1, 12, 1);
+    const sun = swisseph.calc_ut(jd, swisseph.SE_SUN, 0);
+    const houses = swisseph.houses(jd, 45, 12, 'P');
+    res.json({
+      jd,
+      sun_longitude: sun.longitude,
+      sun_latitude: sun.latitude,
+      ascendant: houses[0],
+      mc: houses[1],
+      swisseph_version: swisseph.version || 'unknown'
+    });
+  } catch (err) {
+    console.error('Ephemeris test error:', err);
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
 });
 
 app.listen(PORT, () => {
