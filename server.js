@@ -2,6 +2,9 @@
 // RENDER SERVER — Luna Astrologica API
 // Swiss Ephemeris (swisseph) — precisione professionale reale
 // Node.js + Express
+//
+// IMPORTANTE: la libreria npm 'swisseph' usa API asincrona con callback
+// Metodi: swe_calc_ut, swe_houses, swe_julday (tutti con prefisso swe_)
 // ============================================================
 
 const express = require('express');
@@ -25,13 +28,6 @@ function toZodiac(deg) {
   const d = ((deg % 360) + 360) % 360;
   const idx = Math.floor(d / 30) % 12;
   return { ...ZODIAC[idx], degree: Math.floor(d % 30), minutes: Math.floor(((d % 30) % 1) * 60) };
-}
-
-function julianDay(y, m, d, h, min) {
-  if (m <= 2) { y -= 1; m += 12; }
-  const A = Math.floor(y / 100);
-  const B = 2 - A + Math.floor(A / 4);
-  return Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (m + 1)) + d + B - 1524.5 + h / 24 + min / 1440;
 }
 
 // ===== GEOCODING (usa Nominatim) =====
@@ -65,95 +61,112 @@ app.get('/api/geocode', async (req, res) => {
 });
 
 // ===== TEMA NATALE CON SWISS EPHEMERIS =====
+// swisseph usa callback: swe_calc_ut(jd, planet, flag, callback)
+// Il callback riceve (result) dove result.longitude è la longitudine
 app.post('/api/natal-chart', (req, res) => {
-  try {
-    const { birthDate, birthTime, lat, lng, timezone } = req.body;
-    if (!birthDate || lat == null || lng == null) {
-      return res.status(400).json({ error: 'Missing data' });
-    }
-
-    const [year, month, day] = birthDate.split('-').map(Number);
-    const [hour, minute] = (birthTime || '12:00').split(':').map(Number);
-
-    // Timezone offset
-    let tzOffset = 0;
-    if (timezone) {
-      if (timezone === 'Europe/Rome' || timezone === 'Europe/Paris') tzOffset = 1;
-      else if (timezone === 'Europe/London') tzOffset = 0;
-      else if (timezone === 'America/New_York') tzOffset = -5;
-      else tzOffset = Math.round(lng / 15);
-    } else {
-      tzOffset = Math.round(lng / 15);
-    }
-
-    const utHour = hour - tzOffset;
-    const jd = julianDay(year, month, day, utHour, minute);
-
-    console.log('Natal chart request:', { year, month, day, utHour, minute, jd, lat, lng });
-
-    // Calcolo posizioni con Swiss Ephemeris
-    // Flag 0 = eclittiche (longitudine zodiacale), NON equatoriali
-    const FLAG_ECLIPTIC = 0;
-    const planets = [];
-
-    // SOLE
-    const sun = swisseph.calc_ut(jd, swisseph.SE_SUN, FLAG_ECLIPTIC);
-    if (sun.error) throw new Error('Sun calc error: ' + sun.error);
-    const sunLon = sun.longitude;
-    planets.push({ key: 'sun', lon: sunLon });
-
-    // LUNA
-    const moon = swisseph.calc_ut(jd, swisseph.SE_MOON, FLAG_ECLIPTIC);
-    if (moon.error) throw new Error('Moon calc error: ' + moon.error);
-    const moonLon = moon.longitude;
-    planets.push({ key: 'moon', lon: moonLon });
-
-    // PIANETI
-    const bodies = [
-      { key: 'mercury', id: swisseph.SE_MERCURY },
-      { key: 'venus', id: swisseph.SE_VENUS },
-      { key: 'mars', id: swisseph.SE_MARS },
-      { key: 'jupiter', id: swisseph.SE_JUPITER },
-      { key: 'saturn', id: swisseph.SE_SATURN },
-      { key: 'uranus', id: swisseph.SE_URANUS },
-      { key: 'neptune', id: swisseph.SE_NEPTUNE },
-      { key: 'pluto', id: swisseph.SE_PLUTO },
-    ];
-
-    for (const p of bodies) {
-      const pos = swisseph.calc_ut(jd, p.id, FLAG_ECLIPTIC);
-      if (pos.error) {
-        console.warn('Planet calc error:', p.key, pos.error);
-        continue;
-      }
-      planets.push({ key: p.key, lon: pos.longitude });
-    }
-
-    // Ascendente e MC (case Placidus)
-    // swisseph.houses() restituisce un array, NON un oggetto
-    const houses = swisseph.houses(jd, lat, lng, 'P'); // 'P' = Placidus
-    const asc = houses[0];   // ascendant
-    const mc = houses[1];    // MC (Medium Coeli)
-
-    console.log('Houses calculated:', { asc, mc });
-
-    const response = {
-      planets: planets.map(p => {
-        const z = toZodiac(p.lon);
-        return { key: p.key, sign: z.name, degree: z.degree, minutes: z.minutes, symbol: z.symbol };
-      }),
-      moonSign: toZodiac(moonLon).name,
-      ascendant: toZodiac(asc),
-      mc: toZodiac(mc)
-    };
-
-    console.log('Chart response OK');
-    res.json(response);
-
-  } catch (err) {
-    console.error('Natal chart error:', err);
-    res.status(500).json({ error: err.message, stack: err.stack });
+  const { birthDate, birthTime, lat, lng, timezone } = req.body;
+  if (!birthDate || lat == null || lng == null) {
+    return res.status(400).json({ error: 'Missing data' });
   }
+
+  const [year, month, day] = birthDate.split('-').map(Number);
+  const [hour, minute] = (birthTime || '12:00').split(':').map(Number);
+
+  // Timezone offset
+  let tzOffset = 0;
+  if (timezone) {
+    if (timezone === 'Europe/Rome' || timezone === 'Europe/Paris') tzOffset = 1;
+    else if (timezone === 'Europe/London') tzOffset = 0;
+    else if (timezone === 'America/New_York') tzOffset = -5;
+    else tzOffset = Math.round(lng / 15);
+  } else {
+    tzOffset = Math.round(lng / 15);
+  }
+
+  const utHour = hour - tzOffset + (minute / 60);
+
+  console.log('Natal chart request:', { year, month, day, utHour, lat, lng });
+
+  // Calcolo Julian Day con swe_julday (sincrono)
+  const jd = swisseph.swe_julday(year, month, day, utHour, swisseph.SE_GREG_CAL);
+  console.log('Julian Day:', jd);
+
+  const FLAG = swisseph.SEFLG_SPEED;
+  const planets = [];
+  let moonLon = null;
+
+  // Funzione helper per calcolare un pianeta
+  function calcPlanet(jd, planetId, key, callback) {
+    swisseph.swe_calc_ut(jd, planetId, FLAG, (result) => {
+      if (result.error) {
+        console.error(`Error calculating ${key}:`, result.error);
+        return callback(null);
+      }
+      console.log(`${key} longitude:`, result.longitude);
+      if (key === 'moon') moonLon = result.longitude;
+      callback({ key, lon: result.longitude });
+    });
+  }
+
+  // Calcola tutti i pianeti in sequenza
+  const bodies = [
+    { key: 'sun', id: swisseph.SE_SUN },
+    { key: 'moon', id: swisseph.SE_MOON },
+    { key: 'mercury', id: swisseph.SE_MERCURY },
+    { key: 'venus', id: swisseph.SE_VENUS },
+    { key: 'mars', id: swisseph.SE_MARS },
+    { key: 'jupiter', id: swisseph.SE_JUPITER },
+    { key: 'saturn', id: swisseph.SE_SATURN },
+    { key: 'uranus', id: swisseph.SE_URANUS },
+    { key: 'neptune', id: swisseph.SE_NEPTUNE },
+    { key: 'pluto', id: swisseph.SE_PLUTO },
+  ];
+
+  let completed = 0;
+  function processNext(index) {
+    if (index >= bodies.length) {
+      // Tutti i pianeti calcolati, ora le case
+      calcHouses();
+      return;
+    }
+    const b = bodies[index];
+    calcPlanet(jd, b.id, b.key, (result) => {
+      if (result) planets.push(result);
+      processNext(index + 1);
+    });
+  }
+
+  function calcHouses() {
+    // swe_houses(jd, lat, lng, hsys, callback)
+    // Il callback riceve (result) con result.house array e result.ascendant, result.mc
+    swisseph.swe_houses(jd, lat, lng, 'P', (houseResult) => {
+      if (houseResult.error) {
+        console.error('Houses error:', houseResult.error);
+        return res.status(500).json({ error: 'Houses calculation failed: ' + houseResult.error });
+      }
+
+      console.log('Houses result:', houseResult);
+
+      const asc = houseResult.ascendant;
+      const mc = houseResult.mc;
+
+      const response = {
+        planets: planets.map(p => {
+          const z = toZodiac(p.lon);
+          return { key: p.key, sign: z.name, degree: z.degree, minutes: z.minutes, symbol: z.symbol };
+        }),
+        moonSign: moonLon ? toZodiac(moonLon).name : null,
+        ascendant: toZodiac(asc),
+        mc: toZodiac(mc)
+      };
+
+      console.log('Chart response OK, planets:', planets.length);
+      res.json(response);
+    });
+  }
+
+  // Avvia il calcolo sequenziale
+  processNext(0);
 });
 
 // ===== HEALTH CHECK =====
@@ -164,20 +177,31 @@ app.get('/', (req, res) => {
 // ===== SWISS EPHEMERIS TEST =====
 app.get('/api/test-ephemeris', (req, res) => {
   try {
-    const jd = swisseph.julday(2000, 1, 1, 12, 1);
-    const sun = swisseph.calc_ut(jd, swisseph.SE_SUN, 0);
-    const houses = swisseph.houses(jd, 45, 12, 'P');
-    res.json({
-      jd,
-      sun_longitude: sun.longitude,
-      sun_latitude: sun.latitude,
-      ascendant: houses[0],
-      mc: houses[1],
-      swisseph_version: swisseph.version || 'unknown'
+    const jd = swisseph.swe_julday(2000, 1, 1, 12, swisseph.SE_GREG_CAL);
+
+    swisseph.swe_calc_ut(jd, swisseph.SE_SUN, swisseph.SEFLG_SPEED, (result) => {
+      if (result.error) {
+        return res.status(500).json({ error: 'Calc error: ' + result.error });
+      }
+
+      swisseph.swe_houses(jd, 45, 12, 'P', (houseResult) => {
+        if (houseResult.error) {
+          return res.status(500).json({ error: 'Houses error: ' + houseResult.error });
+        }
+
+        res.json({
+          jd,
+          sun_longitude: result.longitude,
+          sun_latitude: result.latitude,
+          ascendant: houseResult.ascendant,
+          mc: houseResult.mc,
+          swisseph_available: true
+        });
+      });
     });
   } catch (err) {
     console.error('Ephemeris test error:', err);
-    res.status(500).json({ error: err.message, stack: err.stack });
+    res.status(500).json({ error: err.message });
   }
 });
 
