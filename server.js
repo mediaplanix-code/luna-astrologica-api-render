@@ -1,11 +1,19 @@
 // ============================================================
 // RENDER SERVER — Luna Astrologica API
 // Swiss Ephemeris (swisseph npm) — precisione professionale reale
-// Node.js + Express
 //
-// IMPORTANTE: la libreria npm 'swisseph' usa API asincrona con callback
-// swe_houses restituisce: { cusps: [...13], ascmc: [...10] }
-// ascmc[0] = Ascendente, ascmc[1] = MC
+// STRUTTURA RISPOSTA swe_houses:
+//   houseResult = {
+//     house: [cusp1, cusp2, ..., cusp12],  // 12 case
+//     ascendant: 175.78,                   // Ascendente
+//     mc: 85.12,                           // MC
+//     armc: 84.69,
+//     vertex: 348.34,
+//     equatorialAscendant: 174.21,
+//     kochCoAscendant: 170.83,
+//     munkaseyCoAscendant: 176.16,
+//     munkaseyPolarAscendant: 350.83
+//   }
 // ============================================================
 
 const express = require('express');
@@ -31,7 +39,7 @@ function toZodiac(deg) {
   return { ...ZODIAC[idx], degree: Math.floor(d % 30), minutes: Math.floor(((d % 30) % 1) * 60) };
 }
 
-// ===== GEOCODING (usa Nominatim) =====
+// ===== GEOCODING =====
 app.get('/api/geocode', async (req, res) => {
   try {
     const city = req.query.city;
@@ -49,19 +57,14 @@ app.get('/api/geocode', async (req, res) => {
     const lon = parseFloat(place.lon);
     const tzOffset = Math.round(lon / 15);
 
-    res.json({
-      lat, lng: lon,
-      display_name: place.display_name,
-      timezone: tzOffset >= 0 ? `Etc/GMT-${tzOffset}` : `Etc/GMT+${Math.abs(tzOffset)}`,
-      tz_offset: tzOffset
-    });
+    res.json({ lat, lng: lon, display_name: place.display_name, timezone: `Etc/GMT${tzOffset >= 0 ? '-' : '+'}${Math.abs(tzOffset)}`, tz_offset: tzOffset });
   } catch (err) {
     console.error('Geocode error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ===== TEMA NATALE CON SWISS EPHEMERIS =====
+// ===== TEMA NATALE =====
 app.post('/api/natal-chart', (req, res) => {
   const { birthDate, birthTime, lat, lng, timezone } = req.body;
   if (!birthDate || lat == null || lng == null) {
@@ -71,7 +74,6 @@ app.post('/api/natal-chart', (req, res) => {
   const [year, month, day] = birthDate.split('-').map(Number);
   const [hour, minute] = (birthTime || '12:00').split(':').map(Number);
 
-  // Timezone offset
   let tzOffset = 0;
   if (timezone) {
     if (timezone === 'Europe/Rome' || timezone === 'Europe/Paris') tzOffset = 1;
@@ -91,11 +93,10 @@ app.post('/api/natal-chart', (req, res) => {
   const planets = [];
   let moonLon = null;
 
-  // Funzione helper per calcolare un pianeta
   function calcPlanet(jd, planetId, key, callback) {
     swisseph.swe_calc_ut(jd, planetId, FLAG, (result) => {
       if (result.error) {
-        console.warn(`Error calculating ${key}:`, result.error);
+        console.warn(`Error ${key}:`, result.error);
         return callback(null);
       }
       if (key === 'moon') moonLon = result.longitude;
@@ -103,7 +104,6 @@ app.post('/api/natal-chart', (req, res) => {
     });
   }
 
-  // Calcola tutti i pianeti in sequenza
   const bodies = [
     { key: 'sun', id: swisseph.SE_SUN },
     { key: 'moon', id: swisseph.SE_MOON },
@@ -117,40 +117,35 @@ app.post('/api/natal-chart', (req, res) => {
     { key: 'pluto', id: swisseph.SE_PLUTO },
   ];
 
-  let completed = 0;
-  function processNext(index) {
+  let index = 0;
+  function processNext() {
     if (index >= bodies.length) {
-      // Tutti i pianeti calcolati, ora le case
       calcHouses();
       return;
     }
-    const b = bodies[index];
+    const b = bodies[index++];
     calcPlanet(jd, b.id, b.key, (result) => {
       if (result) planets.push(result);
-      processNext(index + 1);
+      processNext();
     });
   }
 
   function calcHouses() {
-    // ✅ CORRETTO: swe_houses restituisce { cusps: [...13], ascmc: [...10] }
-    // ascmc[0] = Ascendente, ascmc[1] = MC
-    swisseph.swe_houses(jd, lat, lng, 'P'.charCodeAt(0), (houseResult) => {
+    swisseph.swe_houses(jd, lat, lng, 'P', (houseResult) => {
       if (houseResult.error) {
         console.error('Houses error:', houseResult.error);
-        return res.status(500).json({ error: 'Houses calculation failed: ' + houseResult.error });
+        return res.status(500).json({ error: 'Houses failed: ' + houseResult.error });
       }
 
       console.log('Houses result:', houseResult);
-      console.log('ascmc array:', houseResult.ascmc);
-      console.log('cusps array:', houseResult.cusps);
 
-      const asc = houseResult.ascmc[0];   // ✅ Ascendente
-      const mc = houseResult.ascmc[1];    // ✅ MC
+      // ✅ CORRETTO: usa .ascendant, .mc, .house[]
+      const asc = houseResult.ascendant;
+      const mc = houseResult.mc;
 
-      // Calcola le 12 case
       const houses = [];
-      for (let i = 1; i <= 12; i++) {
-        houses.push(toZodiac(houseResult.cusps[i]));
+      for (let i = 0; i < 12; i++) {
+        houses.push(toZodiac(houseResult.house[i]));
       }
 
       const response = {
@@ -164,13 +159,12 @@ app.post('/api/natal-chart', (req, res) => {
         houses: houses
       };
 
-      console.log('Chart response OK');
+      console.log('Chart OK, planets:', planets.length, 'houses:', houses.length);
       res.json(response);
     });
   }
 
-  // Avvia il calcolo sequenziale
-  processNext(0);
+  processNext();
 });
 
 // ===== HEALTH CHECK =====
@@ -178,7 +172,7 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', engine: 'swiss-ephemeris', precision: 'professional' });
 });
 
-// ===== SWISS EPHEMERIS TEST =====
+// ===== TEST EPHEMERIS =====
 app.get('/api/test-ephemeris', (req, res) => {
   try {
     const jd = swisseph.swe_julday(2000, 1, 1, 12, swisseph.SE_GREG_CAL);
@@ -188,7 +182,7 @@ app.get('/api/test-ephemeris', (req, res) => {
         return res.status(500).json({ error: 'Calc error: ' + result.error });
       }
 
-      swisseph.swe_houses(jd, 45, 12, 'P'.charCodeAt(0), (houseResult) => {
+      swisseph.swe_houses(jd, 45, 12, 'P', (houseResult) => {
         if (houseResult.error) {
           return res.status(500).json({ error: 'Houses error: ' + houseResult.error });
         }
@@ -196,15 +190,15 @@ app.get('/api/test-ephemeris', (req, res) => {
         res.json({
           jd,
           sun_longitude: result.longitude,
-          ascendant: houseResult.ascmc[0],
-          mc: houseResult.ascmc[1],
-          cusp1: houseResult.cusps[1],
+          ascendant: houseResult.ascendant,
+          mc: houseResult.mc,
+          house1: houseResult.house[0],
           swisseph_available: true
         });
       });
     });
   } catch (err) {
-    console.error('Ephemeris test error:', err);
+    console.error('Test error:', err);
     res.status(500).json({ error: err.message });
   }
 });
