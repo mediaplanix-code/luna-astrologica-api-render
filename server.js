@@ -1,10 +1,11 @@
 // ============================================================
 // RENDER SERVER — Luna Astrologica API
-// Swiss Ephemeris (swisseph) — precisione professionale reale
+// Swiss Ephemeris (swisseph npm) — precisione professionale reale
 // Node.js + Express
 //
 // IMPORTANTE: la libreria npm 'swisseph' usa API asincrona con callback
-// Metodi: swe_calc_ut, swe_houses, swe_julday (tutti con prefisso swe_)
+// swe_houses restituisce: { cusps: [...13], ascmc: [...10] }
+// ascmc[0] = Ascendente, ascmc[1] = MC
 // ============================================================
 
 const express = require('express');
@@ -61,8 +62,6 @@ app.get('/api/geocode', async (req, res) => {
 });
 
 // ===== TEMA NATALE CON SWISS EPHEMERIS =====
-// swisseph usa callback: swe_calc_ut(jd, planet, flag, callback)
-// Il callback riceve (result) dove result.longitude è la longitudine
 app.post('/api/natal-chart', (req, res) => {
   const { birthDate, birthTime, lat, lng, timezone } = req.body;
   if (!birthDate || lat == null || lng == null) {
@@ -84,12 +83,9 @@ app.post('/api/natal-chart', (req, res) => {
   }
 
   const utHour = hour - tzOffset + (minute / 60);
-
-  console.log('Natal chart request:', { year, month, day, utHour, lat, lng });
-
-  // Calcolo Julian Day con swe_julday (sincrono)
   const jd = swisseph.swe_julday(year, month, day, utHour, swisseph.SE_GREG_CAL);
-  console.log('Julian Day:', jd);
+
+  console.log('Natal chart request:', { year, month, day, utHour, jd, lat, lng });
 
   const FLAG = swisseph.SEFLG_SPEED;
   const planets = [];
@@ -99,10 +95,9 @@ app.post('/api/natal-chart', (req, res) => {
   function calcPlanet(jd, planetId, key, callback) {
     swisseph.swe_calc_ut(jd, planetId, FLAG, (result) => {
       if (result.error) {
-        console.error(`Error calculating ${key}:`, result.error);
+        console.warn(`Error calculating ${key}:`, result.error);
         return callback(null);
       }
-      console.log(`${key} longitude:`, result.longitude);
       if (key === 'moon') moonLon = result.longitude;
       callback({ key, lon: result.longitude });
     });
@@ -137,18 +132,26 @@ app.post('/api/natal-chart', (req, res) => {
   }
 
   function calcHouses() {
-    // swe_houses(jd, lat, lng, hsys, callback)
-    // Il callback riceve (result) con result.house array e result.ascendant, result.mc
-    swisseph.swe_houses(jd, lat, lng, 'P', (houseResult) => {
+    // ✅ CORRETTO: swe_houses restituisce { cusps: [...13], ascmc: [...10] }
+    // ascmc[0] = Ascendente, ascmc[1] = MC
+    swisseph.swe_houses(jd, lat, lng, 'P'.charCodeAt(0), (houseResult) => {
       if (houseResult.error) {
         console.error('Houses error:', houseResult.error);
         return res.status(500).json({ error: 'Houses calculation failed: ' + houseResult.error });
       }
 
       console.log('Houses result:', houseResult);
+      console.log('ascmc array:', houseResult.ascmc);
+      console.log('cusps array:', houseResult.cusps);
 
-      const asc = houseResult.ascendant;
-      const mc = houseResult.mc;
+      const asc = houseResult.ascmc[0];   // ✅ Ascendente
+      const mc = houseResult.ascmc[1];    // ✅ MC
+
+      // Calcola le 12 case
+      const houses = [];
+      for (let i = 1; i <= 12; i++) {
+        houses.push(toZodiac(houseResult.cusps[i]));
+      }
 
       const response = {
         planets: planets.map(p => {
@@ -157,10 +160,11 @@ app.post('/api/natal-chart', (req, res) => {
         }),
         moonSign: moonLon ? toZodiac(moonLon).name : null,
         ascendant: toZodiac(asc),
-        mc: toZodiac(mc)
+        mc: toZodiac(mc),
+        houses: houses
       };
 
-      console.log('Chart response OK, planets:', planets.length);
+      console.log('Chart response OK');
       res.json(response);
     });
   }
@@ -184,7 +188,7 @@ app.get('/api/test-ephemeris', (req, res) => {
         return res.status(500).json({ error: 'Calc error: ' + result.error });
       }
 
-      swisseph.swe_houses(jd, 45, 12, 'P', (houseResult) => {
+      swisseph.swe_houses(jd, 45, 12, 'P'.charCodeAt(0), (houseResult) => {
         if (houseResult.error) {
           return res.status(500).json({ error: 'Houses error: ' + houseResult.error });
         }
@@ -192,9 +196,9 @@ app.get('/api/test-ephemeris', (req, res) => {
         res.json({
           jd,
           sun_longitude: result.longitude,
-          sun_latitude: result.latitude,
-          ascendant: houseResult.ascendant,
-          mc: houseResult.mc,
+          ascendant: houseResult.ascmc[0],
+          mc: houseResult.ascmc[1],
+          cusp1: houseResult.cusps[1],
           swisseph_available: true
         });
       });
