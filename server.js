@@ -1,19 +1,8 @@
 // ============================================================
 // RENDER SERVER — Luna Astrologica API
 // Swiss Ephemeris (swisseph npm) — precisione professionale reale
-//
-// STRUTTURA RISPOSTA swe_houses:
-//   houseResult = {
-//     house: [cusp1, cusp2, ..., cusp12],  // 12 case
-//     ascendant: 175.78,                   // Ascendente
-//     mc: 85.12,                           // MC
-//     armc: 84.69,
-//     vertex: 348.34,
-//     equatorialAscendant: 174.21,
-//     kochCoAscendant: 170.83,
-//     munkaseyCoAscendant: 176.16,
-//     munkaseyPolarAscendant: 350.83
-//   }
+// MODIFICATO: salva in astrological_events (non upcoming_events)
+// Aggiunto: severity calcolata automaticamente per filtro Telegram
 // ============================================================
 
 const express = require('express');
@@ -42,6 +31,32 @@ function toZodiac(deg) {
   const d = ((deg % 360) + 360) % 360;
   const idx = Math.floor(d / 30) % 12;
   return { ...ZODIAC[idx], degree: Math.floor(d % 30), minutes: Math.floor(((d % 30) % 1) * 60) };
+}
+
+// ===== CALCOLO SEVERITY =====
+// Pianeti lenti = impatto strutturale (mesi/anni)
+// Pianeti veloci = impatto momentaneo (giorni/ore)
+function calcSeverity(planet, targetPlanet, orb, aspectType) {
+  const SLOW_PLANETS = ['saturn', 'uranus', 'neptune', 'pluto'];
+  const MEDIUM_PLANETS = ['jupiter', 'mars'];
+  const isSlow = SLOW_PLANETS.includes(planet);
+  const isMedium = MEDIUM_PLANETS.includes(planet);
+  const isTargetSlow = SLOW_PLANETS.includes(targetPlanet);
+
+  // Aspetti "forti" (congiunzione, quadrato, opposizione) hanno più impatto
+  const STRONG_ASPECTS = ['congiunzione', 'quadrato', 'opposizione'];
+  const isStrongAspect = STRONG_ASPECTS.includes(aspectType);
+
+  if (isSlow && orb <= 1.0 && isStrongAspect) return 'high';
+  if (isSlow && orb <= 2.0) return 'high';
+  if (isMedium && orb <= 1.0 && isStrongAspect) return 'high';
+  if (isTargetSlow && orb <= 1.0) return 'high';
+
+  if (isSlow && orb <= 3.0) return 'medium';
+  if (isMedium && orb <= 2.0) return 'medium';
+  if (orb <= 1.0) return 'medium';
+
+  return 'low';
 }
 
 // ===== GEOCODING =====
@@ -144,7 +159,6 @@ app.post('/api/natal-chart', (req, res) => {
 
       console.log('Houses result:', houseResult);
 
-      // ✅ CORRETTO: usa .ascendant, .mc, .house[]
       const asc = houseResult.ascendant;
       const mc = houseResult.mc;
 
@@ -310,12 +324,23 @@ app.post('/api/transits', async (req, res) => {
             if (Math.abs(diff - asp.angle) <= asp.orb) {
               const ed = cur.toISOString().split('T')[0];
               const nd = new Date(ed); nd.setDate(nd.getDate() - 3);
+              const orbVal = Number((Math.abs(diff - asp.angle)).toFixed(2));
+              const severity = calcSeverity(tName, nName, orbVal, asp.name);
+
               events.push({
-                user_id, event_date: ed,
-                event_type: `${tName} ${asp.name} ${nName} (Natale)`,
-                planet: tName, target: nName,
-                orb: Number((Math.abs(diff - asp.angle)).toFixed(2)),
-                notify_at: nd.toISOString().split('T')[0]
+                user_id,
+                event_date: ed,
+                event_type: 'aspect',
+                planet: tName,
+                target_planet: nName,
+                aspect_type: asp.name,
+                orb_degrees: orbVal,
+                title: `${tName} ${asp.name} ${nName} (Natale)`,
+                description: `Il transito di ${tName} forma un ${asp.name} con ${nName} del tema natale. Orb: ${orbVal}°`,
+                severity: severity,
+                exact_timestamp: nd.toISOString(),
+                is_notified: false,
+                is_read: false
               });
             }
           }
@@ -328,12 +353,23 @@ app.post('/api/transits', async (req, res) => {
           if (angleDiff(tDeg, natal.houses[h - 1]) < 1.0) {
             const ed = cur.toISOString().split('T')[0];
             const nd = new Date(ed); nd.setDate(nd.getDate() - 3);
+            const orbVal = Number(angleDiff(tDeg, natal.houses[h - 1]).toFixed(2));
+            const severity = calcSeverity(tName, null, orbVal, 'ingresso');
+
             events.push({
-              user_id, event_date: ed,
-              event_type: `${tName} entra in Casa ${h}`,
-              planet: tName, house: h,
-              orb: Number(angleDiff(tDeg, natal.houses[h - 1]).toFixed(2)),
-              notify_at: nd.toISOString().split('T')[0]
+              user_id,
+              event_date: ed,
+              event_type: 'house_ingress',
+              planet: tName,
+              house: h,
+              aspect_type: null,
+              orb_degrees: orbVal,
+              title: `${tName} entra in Casa ${h}`,
+              description: `Il pianeta ${tName} entra nella Casa ${h} del tema natale.`,
+              severity: severity,
+              exact_timestamp: nd.toISOString(),
+              is_notified: false,
+              is_read: false
             });
           }
         }
@@ -350,11 +386,22 @@ app.post('/api/transits', async (req, res) => {
             if (ySign !== tSign) {
               const ed = cur.toISOString().split('T')[0];
               const nd = new Date(ed); nd.setDate(nd.getDate() - 3);
+              const newSign = toZodiac(trans[b.key]).name;
+              const severity = ['saturn', 'uranus', 'neptune', 'pluto'].includes(b.key) ? 'high' : 'medium';
+
               events.push({
-                user_id, event_date: ed,
-                event_type: `${b.key} entra in ${toZodiac(trans[b.key]).name}`,
-                planet: b.key, orb: 0,
-                notify_at: nd.toISOString().split('T')[0]
+                user_id,
+                event_date: ed,
+                event_type: 'sign_change',
+                planet: b.key,
+                aspect_type: null,
+                orb_degrees: 0,
+                title: `${b.key} entra in ${newSign}`,
+                description: `Il pianeta ${b.key} entra nel segno zodiacale ${newSign}.`,
+                severity: severity,
+                exact_timestamp: nd.toISOString(),
+                is_notified: false,
+                is_read: false
               });
             }
           });
@@ -383,15 +430,35 @@ app.post('/api/transits', async (req, res) => {
       }
     }
 
-    // Salva eventi
+    // 🌙 SALVA IN ASTROLOGICAL_EVENTS (non upcoming_events)
     if (events.length > 0) {
       const seen = new Set();
       const unique = [];
       for (const e of events) {
-        const k = `${e.user_id}|${e.event_date}|${e.event_type}`;
+        const k = `${e.user_id}|${e.event_date}|${e.event_type}|${e.planet}|${e.target_planet || ''}|${e.house || ''}`;
         if (!seen.has(k)) { seen.add(k); unique.push(e); }
       }
-      await supabase.from('upcoming_events').upsert(unique, { onConflict: 'user_id,event_date,event_type' });
+
+      // Prima elimina vecchi eventi di questo utente (sovrascrittura completa)
+      const { error: delErr } = await supabase
+        .from('astrological_events')
+        .delete()
+        .eq('user_id', user_id);
+
+      if (delErr) {
+        console.error('Errore cancellazione vecchi eventi:', delErr);
+      }
+
+      // Inserisci nuovi eventi
+      const { error: insErr } = await supabase
+        .from('astrological_events')
+        .insert(unique);
+
+      if (insErr) {
+        console.error('Errore inserimento eventi:', insErr);
+      } else {
+        console.log(`✅ Salvati ${unique.length} eventi in astrological_events per utente ${user_id}`);
+      }
     }
 
     res.json({
@@ -417,6 +484,7 @@ app.post('/api/transits', async (req, res) => {
 app.get('/api/transits', (req, res) => {
   res.json({ status: 'Transits API attivo', use: 'POST /api/transits con body { user_id }' });
 });
+
 app.listen(PORT, () => {
   console.log(`🌙 Luna Astrologica API running on port ${PORT}`);
 });
