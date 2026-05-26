@@ -1,8 +1,8 @@
 // ============================================================
 // RENDER SERVER — Luna Astrologica API
 // Swiss Ephemeris (swisseph npm) — precisione professionale reale
-// MODIFICATO: salva in astrological_events con enum corretti
-// FIX: event_type mappato su valori enum validi
+// MODIFICATO: salva SOLO eventi severity = 'high' in astrological_events
+// Elimina riga informativa "1369 eventi" dal frontend
 // ============================================================
 
 const express = require('express');
@@ -299,7 +299,7 @@ app.post('/api/transits', async (req, res) => {
 
     // Calcola transiti 90 giorni — SINCRONO
     const today = new Date();
-    const events = [];
+    const allEvents = [];
     const daily = [];
 
     for (let i = 0; i < 90; i++) {
@@ -325,10 +325,10 @@ app.post('/api/transits', async (req, res) => {
               const orbVal = Number((Math.abs(diff - asp.angle)).toFixed(2));
               const severity = calcSeverity(tName, nName, orbVal, asp.name);
 
-              events.push({
+              allEvents.push({
                 user_id,
                 event_date: ed,
-                event_type: 'major_aspect',  // ✅ ENUM VALIDO
+                event_type: 'major_aspect',
                 planet: tName,
                 target_planet: nName,
                 aspect_type: asp.name,
@@ -354,10 +354,10 @@ app.post('/api/transits', async (req, res) => {
             const orbVal = Number(angleDiff(tDeg, natal.houses[h - 1]).toFixed(2));
             const severity = calcSeverity(tName, null, orbVal, 'ingresso');
 
-            events.push({
+            allEvents.push({
               user_id,
               event_date: ed,
-              event_type: 'planet_enters_house',  // ✅ ENUM VALIDO
+              event_type: 'planet_enters_house',
               planet: tName,
               house: h,
               aspect_type: null,
@@ -389,10 +389,10 @@ app.post('/api/transits', async (req, res) => {
               const newSign = toZodiac(lonT).name;
               const severity = ['saturn', 'uranus', 'neptune', 'pluto'].includes(b.key) ? 'high' : 'medium';
 
-              events.push({
+              allEvents.push({
                 user_id,
                 event_date: ed,
-                event_type: 'ingress',  // ✅ ENUM VALIDO
+                event_type: 'ingress',
                 planet: b.key,
                 aspect_type: null,
                 orb_degrees: 0,
@@ -430,18 +430,20 @@ app.post('/api/transits', async (req, res) => {
       }
     }
 
-    console.log(`Eventi calcolati: ${events.length}`);
+    // 🌙 FILTRA: salva SOLO eventi severity = 'high'
+    const highEvents = allEvents.filter(e => e.severity === 'high');
+    console.log(`Eventi totali calcolati: ${allEvents.length}`);
+    console.log(`Eventi HIGH da salvare: ${highEvents.length}`);
 
-    // 🌙 SALVA IN ASTROLOGICAL_EVENTS
-    if (events.length > 0) {
+    if (highEvents.length > 0) {
       const seen = new Set();
       const unique = [];
-      for (const e of events) {
+      for (const e of highEvents) {
         const k = `${e.user_id}|${e.event_date}|${e.event_type}|${e.planet}|${e.target_planet || ''}|${e.house || ''}`;
         if (!seen.has(k)) { seen.add(k); unique.push(e); }
       }
 
-      console.log(`Eventi unici: ${unique.length}`);
+      console.log(`Eventi HIGH unici: ${unique.length}`);
 
       // Prima elimina vecchi eventi di questo utente (sovrascrittura completa)
       const { error: delErr } = await supabase
@@ -455,7 +457,7 @@ app.post('/api/transits', async (req, res) => {
         console.log('Vecchi eventi cancellati');
       }
 
-      // Inserisci nuovi eventi
+      // Inserisci nuovi eventi HIGH
       const { error: insErr } = await supabase
         .from('astrological_events')
         .insert(unique);
@@ -463,8 +465,10 @@ app.post('/api/transits', async (req, res) => {
       if (insErr) {
         console.error('Errore inserimento eventi:', insErr);
       } else {
-        console.log(`✅ Salvati ${unique.length} eventi in astrological_events per utente ${user_id}`);
+        console.log(`✅ Salvati ${unique.length} eventi HIGH in astrological_events per utente ${user_id}`);
       }
+    } else {
+      console.log('Nessun evento HIGH trovato — DB non popolato');
     }
 
     res.json({
@@ -476,7 +480,8 @@ app.post('/api/transits', async (req, res) => {
         mcSign: toZodiac(natal.mc).name,
       },
       transitsToday: daily,
-      eventsFound: events.length,
+      eventsFound: allEvents.length,
+      highEventsFound: highEvents.length,
       message: 'Transiti calcolati e salvati'
     });
 
