@@ -3,6 +3,7 @@
 // Swiss Ephemeris (swisseph npm) — precisione professionale reale
 // MODIFICATO: salva in astrological_events (non upcoming_events)
 // Aggiunto: severity calcolata automaticamente per filtro Telegram
+// FIX: swisseph sincrono per evitare race condition nelle callback
 // ============================================================
 
 const express = require('express');
@@ -34,16 +35,12 @@ function toZodiac(deg) {
 }
 
 // ===== CALCOLO SEVERITY =====
-// Pianeti lenti = impatto strutturale (mesi/anni)
-// Pianeti veloci = impatto momentaneo (giorni/ore)
 function calcSeverity(planet, targetPlanet, orb, aspectType) {
   const SLOW_PLANETS = ['saturn', 'uranus', 'neptune', 'pluto'];
   const MEDIUM_PLANETS = ['jupiter', 'mars'];
   const isSlow = SLOW_PLANETS.includes(planet);
   const isMedium = MEDIUM_PLANETS.includes(planet);
-  const isTargetSlow = SLOW_PLANETS.includes(targetPlanet);
 
-  // Aspetti "forti" (congiunzione, quadrato, opposizione) hanno più impatto
   const STRONG_ASPECTS = ['congiunzione', 'quadrato', 'opposizione'];
   const isStrongAspect = STRONG_ASPECTS.includes(aspectType);
 
@@ -57,6 +54,26 @@ function calcSeverity(planet, targetPlanet, orb, aspectType) {
   if (orb <= 1.0) return 'medium';
 
   return 'low';
+}
+
+// ===== WRAPPER SINCRONI swisseph =====
+// swisseph ha anche metodi sincroni (senza callback) che restituiscono il risultato direttamente
+function calcPlanetSync(jd, planetId) {
+  const result = swisseph.swe_calc_ut(jd, planetId, swisseph.SEFLG_SPEED);
+  if (result.error) {
+    console.warn('Calc error:', result.error);
+    return null;
+  }
+  return result.longitude;
+}
+
+function calcHousesSync(jd, lat, lng) {
+  const result = swisseph.swe_houses(jd, lat, lng, 'P');
+  if (result.error) {
+    console.error('Houses error:', result.error);
+    return null;
+  }
+  return result;
 }
 
 // ===== GEOCODING =====
@@ -86,104 +103,87 @@ app.get('/api/geocode', async (req, res) => {
 
 // ===== TEMA NATALE =====
 app.post('/api/natal-chart', (req, res) => {
-  const { birthDate, birthTime, lat, lng, timezone } = req.body;
-  if (!birthDate || lat == null || lng == null) {
-    return res.status(400).json({ error: 'Missing data' });
-  }
-
-  const [year, month, day] = birthDate.split('-').map(Number);
-  const [hour, minute] = (birthTime || '12:00').split(':').map(Number);
-
-  let tzOffset = 0;
-  if (timezone) {
-    if (timezone === 'Europe/Rome' || timezone === 'Europe/Paris') tzOffset = 1;
-    else if (timezone === 'Europe/London') tzOffset = 0;
-    else if (timezone === 'America/New_York') tzOffset = -5;
-    else tzOffset = Math.round(lng / 15);
-  } else {
-    tzOffset = Math.round(lng / 15);
-  }
-
-  const utHour = hour - tzOffset + (minute / 60);
-  const jd = swisseph.swe_julday(year, month, day, utHour, swisseph.SE_GREG_CAL);
-
-  console.log('Natal chart request:', { year, month, day, utHour, jd, lat, lng });
-
-  const FLAG = swisseph.SEFLG_SPEED;
-  const planets = [];
-  let moonLon = null;
-
-  function calcPlanet(jd, planetId, key, callback) {
-    swisseph.swe_calc_ut(jd, planetId, FLAG, (result) => {
-      if (result.error) {
-        console.warn(`Error ${key}:`, result.error);
-        return callback(null);
-      }
-      if (key === 'moon') moonLon = result.longitude;
-      callback({ key, lon: result.longitude });
-    });
-  }
-
-  const bodies = [
-    { key: 'sun', id: swisseph.SE_SUN },
-    { key: 'moon', id: swisseph.SE_MOON },
-    { key: 'mercury', id: swisseph.SE_MERCURY },
-    { key: 'venus', id: swisseph.SE_VENUS },
-    { key: 'mars', id: swisseph.SE_MARS },
-    { key: 'jupiter', id: swisseph.SE_JUPITER },
-    { key: 'saturn', id: swisseph.SE_SATURN },
-    { key: 'uranus', id: swisseph.SE_URANUS },
-    { key: 'neptune', id: swisseph.SE_NEPTUNE },
-    { key: 'pluto', id: swisseph.SE_PLUTO },
-  ];
-
-  let index = 0;
-  function processNext() {
-    if (index >= bodies.length) {
-      calcHouses();
-      return;
+  try {
+    const { birthDate, birthTime, lat, lng, timezone } = req.body;
+    if (!birthDate || lat == null || lng == null) {
+      return res.status(400).json({ error: 'Missing data' });
     }
-    const b = bodies[index++];
-    calcPlanet(jd, b.id, b.key, (result) => {
-      if (result) planets.push(result);
-      processNext();
-    });
-  }
 
-  function calcHouses() {
-    swisseph.swe_houses(jd, lat, lng, 'P', (houseResult) => {
-      if (houseResult.error) {
-        console.error('Houses error:', houseResult.error);
-        return res.status(500).json({ error: 'Houses failed: ' + houseResult.error });
+    const [year, month, day] = birthDate.split('-').map(Number);
+    const [hour, minute] = (birthTime || '12:00').split(':').map(Number);
+
+    let tzOffset = 0;
+    if (timezone) {
+      if (timezone === 'Europe/Rome' || timezone === 'Europe/Paris') tzOffset = 1;
+      else if (timezone === 'Europe/London') tzOffset = 0;
+      else if (timezone === 'America/New_York') tzOffset = -5;
+      else tzOffset = Math.round(lng / 15);
+    } else {
+      tzOffset = Math.round(lng / 15);
+    }
+
+    const utHour = hour - tzOffset + (minute / 60);
+    const jd = swisseph.swe_julday(year, month, day, utHour, swisseph.SE_GREG_CAL);
+
+    console.log('Natal chart request:', { year, month, day, utHour, jd, lat, lng });
+
+    const FLAG = swisseph.SEFLG_SPEED;
+    const planets = [];
+    let moonLon = null;
+
+    const bodies = [
+      { key: 'sun', id: swisseph.SE_SUN },
+      { key: 'moon', id: swisseph.SE_MOON },
+      { key: 'mercury', id: swisseph.SE_MERCURY },
+      { key: 'venus', id: swisseph.SE_VENUS },
+      { key: 'mars', id: swisseph.SE_MARS },
+      { key: 'jupiter', id: swisseph.SE_JUPITER },
+      { key: 'saturn', id: swisseph.SE_SATURN },
+      { key: 'uranus', id: swisseph.SE_URANUS },
+      { key: 'neptune', id: swisseph.SE_NEPTUNE },
+      { key: 'pluto', id: swisseph.SE_PLUTO },
+    ];
+
+    for (const b of bodies) {
+      const lon = calcPlanetSync(jd, b.id);
+      if (lon !== null) {
+        if (b.key === 'moon') moonLon = lon;
+        planets.push({ key: b.key, lon });
       }
+    }
 
-      console.log('Houses result:', houseResult);
+    const houseResult = calcHousesSync(jd, lat, lng);
+    if (!houseResult) {
+      return res.status(500).json({ error: 'Houses calculation failed' });
+    }
 
-      const asc = houseResult.ascendant;
-      const mc = houseResult.mc;
+    console.log('Houses result:', houseResult);
 
-      const houses = [];
-      for (let i = 0; i < 12; i++) {
-        houses.push(toZodiac(houseResult.house[i]));
-      }
+    const asc = houseResult.ascendant;
+    const mc = houseResult.mc;
 
-      const response = {
-        planets: planets.map(p => {
-          const z = toZodiac(p.lon);
-          return { key: p.key, sign: z.name, degree: z.degree, minutes: z.minutes, symbol: z.symbol };
-        }),
-        moonSign: moonLon ? toZodiac(moonLon).name : null,
-        ascendant: toZodiac(asc),
-        mc: toZodiac(mc),
-        houses: houses
-      };
+    const houses = [];
+    for (let i = 0; i < 12; i++) {
+      houses.push(toZodiac(houseResult.house[i]));
+    }
 
-      console.log('Chart OK, planets:', planets.length, 'houses:', houses.length);
-      res.json(response);
-    });
+    const response = {
+      planets: planets.map(p => {
+        const z = toZodiac(p.lon);
+        return { key: p.key, sign: z.name, degree: z.degree, minutes: z.minutes, symbol: z.symbol };
+      }),
+      moonSign: moonLon ? toZodiac(moonLon).name : null,
+      ascendant: toZodiac(asc),
+      mc: toZodiac(mc),
+      houses: houses
+    };
+
+    console.log('Chart OK, planets:', planets.length, 'houses:', houses.length);
+    res.json(response);
+  } catch (err) {
+    console.error('Natal chart error:', err);
+    res.status(500).json({ error: err.message });
   }
-
-  processNext();
 });
 
 // ===== HEALTH CHECK =====
@@ -195,26 +195,24 @@ app.get('/', (req, res) => {
 app.get('/api/test-ephemeris', (req, res) => {
   try {
     const jd = swisseph.swe_julday(2000, 1, 1, 12, swisseph.SE_GREG_CAL);
+    const sunResult = swisseph.swe_calc_ut(jd, swisseph.SE_SUN, swisseph.SEFLG_SPEED);
 
-    swisseph.swe_calc_ut(jd, swisseph.SE_SUN, swisseph.SEFLG_SPEED, (result) => {
-      if (result.error) {
-        return res.status(500).json({ error: 'Calc error: ' + result.error });
-      }
+    if (sunResult.error) {
+      return res.status(500).json({ error: 'Calc error: ' + sunResult.error });
+    }
 
-      swisseph.swe_houses(jd, 45, 12, 'P', (houseResult) => {
-        if (houseResult.error) {
-          return res.status(500).json({ error: 'Houses error: ' + houseResult.error });
-        }
+    const houseResult = swisseph.swe_houses(jd, 45, 12, 'P');
+    if (houseResult.error) {
+      return res.status(500).json({ error: 'Houses error: ' + houseResult.error });
+    }
 
-        res.json({
-          jd,
-          sun_longitude: result.longitude,
-          ascendant: houseResult.ascendant,
-          mc: houseResult.mc,
-          house1: houseResult.house[0],
-          swisseph_available: true
-        });
-      });
+    res.json({
+      jd,
+      sun_longitude: sunResult.longitude,
+      ascendant: houseResult.ascendant,
+      mc: houseResult.mc,
+      house1: houseResult.house[0],
+      swisseph_available: true
     });
   } catch (err) {
     console.error('Test error:', err);
@@ -245,7 +243,7 @@ app.post('/api/transits', async (req, res) => {
     const utHour = hh - tzOffset + (mm / 60);
     const natalJD = swisseph.swe_julday(y, m, d, utHour, swisseph.SE_GREG_CAL);
 
-    // Tema natale
+    // Tema natale — SINCRONO
     const natal = {};
     const bodies = [
       { key: 'sun', id: swisseph.SE_SUN },
@@ -261,16 +259,18 @@ app.post('/api/transits', async (req, res) => {
     ];
 
     for (const b of bodies) {
-      swisseph.swe_calc_ut(natalJD, b.id, swisseph.SEFLG_SPEED, (r) => {
-        natal[b.key] = r.longitude;
-      });
+      const lon = calcPlanetSync(natalJD, b.id);
+      if (lon !== null) natal[b.key] = lon;
     }
 
-    swisseph.swe_houses(natalJD, Number(profile.birth_latitude), Number(profile.birth_longitude), 'P', (h) => {
-      natal.houses = h.house;
-      natal.ascendant = h.ascendant;
-      natal.mc = h.mc;
-    });
+    const houseResult = calcHousesSync(natalJD, Number(profile.birth_latitude), Number(profile.birth_longitude));
+    if (houseResult) {
+      natal.houses = houseResult.house;
+      natal.ascendant = houseResult.ascendant;
+      natal.mc = houseResult.mc;
+    }
+
+    console.log('Natal calcolato:', Object.keys(natal));
 
     // Aspetti
     const ASPECTS = [
@@ -298,7 +298,7 @@ app.post('/api/transits', async (req, res) => {
       return 1;
     }
 
-    // Calcola transiti 90 giorni
+    // Calcola transiti 90 giorni — SINCRONO
     const today = new Date();
     const events = [];
     const daily = [];
@@ -310,9 +310,8 @@ app.post('/api/transits', async (req, res) => {
 
       const trans = {};
       for (const b of bodies) {
-        swisseph.swe_calc_ut(jd, b.id, swisseph.SEFLG_SPEED, (r) => {
-          trans[b.key] = r.longitude;
-        });
+        const lon = calcPlanetSync(jd, b.id);
+        if (lon !== null) trans[b.key] = lon;
       }
 
       // Aspetti vs natali
@@ -380,13 +379,15 @@ app.post('/api/transits', async (req, res) => {
         const yest = new Date(cur); yest.setDate(yest.getDate() - 1);
         const jdY = swisseph.swe_julday(yest.getFullYear(), yest.getMonth() + 1, yest.getDate(), 12, swisseph.SE_GREG_CAL);
         for (const b of bodies) {
-          swisseph.swe_calc_ut(jdY, b.id, swisseph.SEFLG_SPEED, (rY) => {
-            const ySign = Math.floor(rY.longitude / 30);
-            const tSign = Math.floor(trans[b.key] / 30);
+          const lonY = calcPlanetSync(jdY, b.id);
+          const lonT = trans[b.key];
+          if (lonY !== null && lonT !== undefined) {
+            const ySign = Math.floor(lonY / 30);
+            const tSign = Math.floor(lonT / 30);
             if (ySign !== tSign) {
               const ed = cur.toISOString().split('T')[0];
               const nd = new Date(ed); nd.setDate(nd.getDate() - 3);
-              const newSign = toZodiac(trans[b.key]).name;
+              const newSign = toZodiac(lonT).name;
               const severity = ['saturn', 'uranus', 'neptune', 'pluto'].includes(b.key) ? 'high' : 'medium';
 
               events.push({
@@ -404,7 +405,7 @@ app.post('/api/transits', async (req, res) => {
                 is_read: false
               });
             }
-          });
+          }
         }
       }
 
@@ -430,6 +431,8 @@ app.post('/api/transits', async (req, res) => {
       }
     }
 
+    console.log(`Eventi calcolati: ${events.length}`);
+
     // 🌙 SALVA IN ASTROLOGICAL_EVENTS (non upcoming_events)
     if (events.length > 0) {
       const seen = new Set();
@@ -439,6 +442,8 @@ app.post('/api/transits', async (req, res) => {
         if (!seen.has(k)) { seen.add(k); unique.push(e); }
       }
 
+      console.log(`Eventi unici: ${unique.length}`);
+
       // Prima elimina vecchi eventi di questo utente (sovrascrittura completa)
       const { error: delErr } = await supabase
         .from('astrological_events')
@@ -447,6 +452,8 @@ app.post('/api/transits', async (req, res) => {
 
       if (delErr) {
         console.error('Errore cancellazione vecchi eventi:', delErr);
+      } else {
+        console.log('Vecchi eventi cancellati');
       }
 
       // Inserisci nuovi eventi
@@ -475,7 +482,7 @@ app.post('/api/transits', async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err);
+    console.error('Transits error:', err);
     res.status(500).json({ error: err.message });
   }
 });
