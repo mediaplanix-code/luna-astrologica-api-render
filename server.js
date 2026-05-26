@@ -1,9 +1,8 @@
 // ============================================================
 // RENDER SERVER — Luna Astrologica API
 // Swiss Ephemeris (swisseph npm) — precisione professionale reale
-// MODIFICATO: salva in astrological_events (non upcoming_events)
-// Aggiunto: severity calcolata automaticamente per filtro Telegram
-// FIX: swisseph sincrono per evitare race condition nelle callback
+// MODIFICATO: salva in astrological_events con enum corretti
+// FIX: event_type mappato su valori enum validi
 // ============================================================
 
 const express = require('express');
@@ -58,7 +57,6 @@ function calcSeverity(planet, targetPlanet, orb, aspectType) {
 }
 
 // ===== WRAPPER SINCRONI swisseph =====
-// swisseph ha anche metodi sincroni (senza callback) che restituiscono il risultato direttamente
 function calcPlanetSync(jd, planetId) {
   const result = swisseph.swe_calc_ut(jd, planetId, swisseph.SEFLG_SPEED);
   if (result.error) {
@@ -330,7 +328,7 @@ app.post('/api/transits', async (req, res) => {
               events.push({
                 user_id,
                 event_date: ed,
-                event_type: 'aspect',
+                event_type: 'major_aspect',  // ✅ ENUM VALIDO
                 planet: tName,
                 target_planet: nName,
                 aspect_type: asp.name,
@@ -359,7 +357,7 @@ app.post('/api/transits', async (req, res) => {
             events.push({
               user_id,
               event_date: ed,
-              event_type: 'house_ingress',
+              event_type: 'planet_enters_house',  // ✅ ENUM VALIDO
               planet: tName,
               house: h,
               aspect_type: null,
@@ -394,7 +392,7 @@ app.post('/api/transits', async (req, res) => {
               events.push({
                 user_id,
                 event_date: ed,
-                event_type: 'sign_change',
+                event_type: 'ingress',  // ✅ ENUM VALIDO
                 planet: b.key,
                 aspect_type: null,
                 orb_degrees: 0,
@@ -434,7 +432,7 @@ app.post('/api/transits', async (req, res) => {
 
     console.log(`Eventi calcolati: ${events.length}`);
 
-    // 🌙 SALVA IN ASTROLOGICAL_EVENTS (non upcoming_events)
+    // 🌙 SALVA IN ASTROLOGICAL_EVENTS
     if (events.length > 0) {
       const seen = new Set();
       const unique = [];
