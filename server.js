@@ -40,6 +40,7 @@ function calcSeverity(planet, targetPlanet, orb, aspectType) {
   const MEDIUM_PLANETS = ['jupiter', 'mars'];
   const isSlow = SLOW_PLANETS.includes(planet);
   const isMedium = MEDIUM_PLANETS.includes(planet);
+  const isTargetSlow = targetPlanet && SLOW_PLANETS.includes(targetPlanet);
 
   const STRONG_ASPECTS = ['congiunzione', 'quadrato', 'opposizione'];
   const isStrongAspect = STRONG_ASPECTS.includes(aspectType);
