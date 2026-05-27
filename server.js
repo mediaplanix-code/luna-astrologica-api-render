@@ -103,7 +103,7 @@ app.get('/api/geocode', async (req, res) => {
 });
 
 // ===== TEMA NATALE =====
-app.post('/api/natal-chart', (req, res) => {
+app.post('/api/natal-chart', async (req, res) => {
   try {
     const { birthDate, birthTime, lat, lng, timezone } = req.body;
     if (!birthDate || lat == null || lng == null) {
