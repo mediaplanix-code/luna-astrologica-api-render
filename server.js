@@ -3,12 +3,14 @@
 // Swiss Ephemeris (swisseph npm) — precisione professionale reale
 // MODIFICATO: salva SOLO eventi severity = 'high' in astrological_events
 // Elimina riga informativa "1369 eventi" dal frontend
+// FIX: Aggiunto node-fetch per geocoding
 // ============================================================
 
 const express = require('express');
 const swisseph = require('swisseph');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
+const fetch = require('node-fetch');  // FIX: import esplicito
 
 const app = express();
 app.use(cors({ origin: '*' }));
