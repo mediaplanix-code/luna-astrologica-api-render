@@ -1,16 +1,18 @@
 // ============================================================
 // RENDER SERVER — Luna Astrologica API
 // Swiss Ephemeris (swisseph npm) — precisione professionale reale
-// MODIFICATO: salva SOLO eventi severity = 'high' in astrological_events
-// Elimina riga informativa "1369 eventi" dal frontend
-// FIX: Aggiunto node-fetch per geocoding
+// MODIFICATO: 
+//  - salva tema natale in natal_charts (upsert)
+//  - salva future_events (100 HIGH) in natal_charts.future_events JSONB
+//  - estrae top 3 in upcoming_events per Telegram
+//  - FIX: async sulla rotta natal-chart
 // ============================================================
 
 const express = require('express');
 const swisseph = require('swisseph');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
-const fetch = require('node-fetch');  // FIX: import esplicito
+const fetch = require('node-fetch');
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -105,7 +107,7 @@ app.get('/api/geocode', async (req, res) => {
 // ===== TEMA NATALE =====
 app.post('/api/natal-chart', async (req, res) => {
   try {
-    const { birthDate, birthTime, lat, lng, timezone } = req.body;
+    const { birthDate, birthTime, lat, lng, timezone, user_id } = req.body;
     if (!birthDate || lat == null || lng == null) {
       return res.status(400).json({ error: 'Missing data' });
     }
@@ -182,33 +184,35 @@ app.post('/api/natal-chart', async (req, res) => {
     console.log('Chart OK, planets:', planets.length, 'houses:', houses.length);
 
     // 🌙 SALVA in natal_charts (upsert)
-    try {
-      const { error: upsertErr } = await supabase
-        .from('natal_charts')
-        .upsert({
-          user_id: req.body.user_id,
-          planets: response.planets,
-          houses: response.houses,
-          aspects: [], // calcolati lato client per ora
-          points: {
-            ascendant: response.ascendant,
-            mc: response.mc,
-            moon_sign: response.moonSign
-          },
-          house_system: 'Placidus',
-          zodiac_type: 'Tropic',
-          calculation_engine: 'swisseph',
-          is_verified: true,
-          calculated_at: new Date().toISOString()
-        }, { onConflict: 'user_id' });
+    if (user_id) {
+      try {
+        const { error: upsertErr } = await supabase
+          .from('natal_charts')
+          .upsert({
+            user_id: user_id,
+            planets: response.planets,
+            houses: response.houses,
+            aspects: [],
+            points: {
+              ascendant: response.ascendant,
+              mc: response.mc,
+              moon_sign: response.moonSign
+            },
+            house_system: 'Placidus',
+            zodiac_type: 'Tropic',
+            calculation_engine: 'swisseph',
+            is_verified: true,
+            calculated_at: new Date().toISOString()
+          }, { onConflict: 'user_id' });
 
-      if (upsertErr) {
-        console.error('Errore salvataggio natal_charts:', upsertErr);
-      } else {
-        console.log('✅ Tema natale salvato in natal_charts per user:', req.body.user_id);
+        if (upsertErr) {
+          console.error('Errore salvataggio natal_charts:', upsertErr);
+        } else {
+          console.log('✅ Tema natale salvato in natal_charts per user:', user_id);
+        }
+      } catch (dbErr) {
+        console.error('DB error natal_charts:', dbErr);
       }
-    } catch (dbErr) {
-      console.error('DB error natal_charts:', dbErr);
     }
 
     res.json(response);
@@ -359,7 +363,6 @@ app.post('/api/transits', async (req, res) => {
               const severity = calcSeverity(tName, nName, orbVal, asp.name);
 
               allEvents.push({
-                user_id,
                 event_date: ed,
                 event_type: 'major_aspect',
                 planet: tName,
@@ -369,9 +372,7 @@ app.post('/api/transits', async (req, res) => {
                 title: `${tName} ${asp.name} ${nName} (Natale)`,
                 description: `Il transito di ${tName} forma un ${asp.name} con ${nName} del tema natale. Orb: ${orbVal}°`,
                 severity: severity,
-                exact_timestamp: nd.toISOString(),
-                is_notified: false,
-                is_read: false
+                exact_timestamp: nd.toISOString()
               });
             }
           }
@@ -388,19 +389,15 @@ app.post('/api/transits', async (req, res) => {
             const severity = calcSeverity(tName, null, orbVal, 'ingresso');
 
             allEvents.push({
-              user_id,
               event_date: ed,
               event_type: 'planet_enters_house',
               planet: tName,
               house: h,
-              aspect_type: null,
               orb_degrees: orbVal,
               title: `${tName} entra in Casa ${h}`,
               description: `Il pianeta ${tName} entra nella Casa ${h} del tema natale.`,
               severity: severity,
-              exact_timestamp: nd.toISOString(),
-              is_notified: false,
-              is_read: false
+              exact_timestamp: nd.toISOString()
             });
           }
         }
@@ -423,18 +420,14 @@ app.post('/api/transits', async (req, res) => {
               const severity = ['saturn', 'uranus', 'neptune', 'pluto'].includes(b.key) ? 'high' : 'medium';
 
               allEvents.push({
-                user_id,
                 event_date: ed,
                 event_type: 'ingress',
                 planet: b.key,
-                aspect_type: null,
                 orb_degrees: 0,
                 title: `${b.key} entra in ${newSign}`,
                 description: `Il pianeta ${b.key} entra nel segno zodiacale ${newSign}.`,
                 severity: severity,
-                exact_timestamp: nd.toISOString(),
-                is_notified: false,
-                is_read: false
+                exact_timestamp: nd.toISOString()
               });
             }
           }
@@ -463,45 +456,86 @@ app.post('/api/transits', async (req, res) => {
       }
     }
 
-    // 🌙 FILTRA: salva SOLO eventi severity = 'high'
-    const highEvents = allEvents.filter(e => e.severity === 'high');
-    console.log(`Eventi totali calcolati: ${allEvents.length}`);
-    console.log(`Eventi HIGH da salvare: ${highEvents.length}`);
+    // 🌙 ORDINA per rilevanza e prendi top 3
+    const PRIORITY = {
+      'pluto': 10, 'neptune': 9, 'uranus': 8, 'saturn': 7,
+      'jupiter': 6, 'mars': 5, 'sun': 4, 'venus': 3,
+      'mercury': 2, 'moon': 1
+    };
 
-    if (highEvents.length > 0) {
-      const seen = new Set();
-      const unique = [];
-      for (const e of highEvents) {
-        const k = `${e.user_id}|${e.event_date}|${e.event_type}|${e.planet}|${e.target_planet || ''}|${e.house || ''}`;
-        if (!seen.has(k)) { seen.add(k); unique.push(e); }
-      }
+    const highEvents = allEvents
+      .filter(e => e.severity === 'high')
+      .map(e => ({
+        ...e,
+        score: (PRIORITY[e.planet] || 0) +
+               (e.aspect_type === 'opposizione' ? 5 :
+                e.aspect_type === 'quadrato' ? 4 :
+                e.aspect_type === 'congiunzione' ? 3 :
+                e.event_type === 'planet_enters_house' ? 2 : 1)
+      }))
+      .sort((a, b) => b.score - a.score);
 
-      console.log(`Eventi HIGH unici: ${unique.length}`);
+    const top3Events = highEvents.slice(0, 3);
 
-      // Prima elimina vecchi eventi di questo utente (sovrascrittura completa)
-      const { error: delErr } = await supabase
-        .from('astrological_events')
-        .delete()
+    console.log(`Eventi totali: ${allEvents.length}, HIGH: ${highEvents.length}, Top 3: ${top3Events.length}`);
+
+    // 🌙 SALVA future_events (tutti HIGH) in natal_charts
+    try {
+      const futureEvents = highEvents.map(e => ({
+        event_date: e.event_date,
+        event_type: e.event_type,
+        planet: e.planet,
+        target_planet: e.target_planet || null,
+        house: e.house || null,
+        aspect_type: e.aspect_type,
+        orb_degrees: e.orb_degrees,
+        title: e.title,
+        description: e.description,
+        severity: e.severity
+      }));
+
+      const { error: updateErr } = await supabase
+        .from('natal_charts')
+        .update({
+          future_events: futureEvents,
+          updated_at: new Date().toISOString()
+        })
         .eq('user_id', user_id);
 
-      if (delErr) {
-        console.error('Errore cancellazione vecchi eventi:', delErr);
+      if (updateErr) {
+        console.error('Errore salvataggio future_events:', updateErr);
       } else {
-        console.log('Vecchi eventi cancellati');
+        console.log(`✅ Salvati ${futureEvents.length} future_events in natal_charts`);
       }
+    } catch (e) {
+      console.error('DB error future_events:', e);
+    }
 
-      // Inserisci nuovi eventi HIGH
-      const { error: insErr } = await supabase
-        .from('astrological_events')
-        .insert(unique);
+    // 🌙 SALVA top 3 in upcoming_events per Telegram
+    if (top3Events.length > 0) {
+      try {
+        // Cancella vecchi upcoming_events
+        await supabase.from('upcoming_events').delete().eq('user_id', user_id);
 
-      if (insErr) {
-        console.error('Errore inserimento eventi:', insErr);
-      } else {
-        console.log(`✅ Salvati ${unique.length} eventi HIGH in astrological_events per utente ${user_id}`);
+        const upcoming = top3Events.map(e => ({
+          user_id,
+          event_date: e.event_date,
+          notify_at: e.exact_timestamp,
+          telegram_sent: false,
+          title: e.title,
+          description: e.description,
+          severity: e.severity
+        }));
+
+        const { error: insErr } = await supabase.from('upcoming_events').insert(upcoming);
+        if (insErr) {
+          console.error('Errore upcoming_events:', insErr);
+        } else {
+          console.log(`✅ Salvati ${upcoming.length} upcoming_events per Telegram`);
+        }
+      } catch (e) {
+        console.error('DB error upcoming_events:', e);
       }
-    } else {
-      console.log('Nessun evento HIGH trovato — DB non popolato');
     }
 
     res.json({
@@ -515,6 +549,7 @@ app.post('/api/transits', async (req, res) => {
       transitsToday: daily,
       eventsFound: allEvents.length,
       highEventsFound: highEvents.length,
+      top3ForTelegram: top3Events.length,
       message: 'Transiti calcolati e salvati'
     });
 
