@@ -180,6 +180,37 @@ app.post('/api/natal-chart', (req, res) => {
     };
 
     console.log('Chart OK, planets:', planets.length, 'houses:', houses.length);
+
+    // 🌙 SALVA in natal_charts (upsert)
+    try {
+      const { error: upsertErr } = await supabase
+        .from('natal_charts')
+        .upsert({
+          user_id: req.body.user_id,
+          planets: response.planets,
+          houses: response.houses,
+          aspects: [], // calcolati lato client per ora
+          points: {
+            ascendant: response.ascendant,
+            mc: response.mc,
+            moon_sign: response.moonSign
+          },
+          house_system: 'Placidus',
+          zodiac_type: 'Tropic',
+          calculation_engine: 'swisseph',
+          is_verified: true,
+          calculated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+
+      if (upsertErr) {
+        console.error('Errore salvataggio natal_charts:', upsertErr);
+      } else {
+        console.log('✅ Tema natale salvato in natal_charts per user:', req.body.user_id);
+      }
+    } catch (dbErr) {
+      console.error('DB error natal_charts:', dbErr);
+    }
+
     res.json(response);
   } catch (err) {
     console.error('Natal chart error:', err);
