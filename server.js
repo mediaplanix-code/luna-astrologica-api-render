@@ -7,6 +7,7 @@
 // - estrae top 3 in upcoming_events per Telegram
 // - FIX: async sulla rotta natal-chart
 // - FIX: geocoding robusto con fallback multipli
+// - FIX: transiti gestiscono birth_time null e coordinate mancanti
 // ============================================================
 
 const express = require('express');
@@ -80,6 +81,32 @@ function calcHousesSync(jd, lat, lng) {
   return result;
 }
 
+// ===== HELPER: fetch JSON sicuro =====
+async function safeFetchJson(url, options = {}) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeout || 10000);
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      console.warn(`HTTP ${response.status} from ${url}`);
+      return null;
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      console.warn(`Non-JSON response from ${url}: ${contentType}`);
+      return null;
+    }
+
+    return await response.json();
+  } catch (err) {
+    console.warn(`Fetch error for ${url}:`, err.message);
+    return null;
+  }
+}
+
 // ===== GEOCODING ROBUSTO con fallback =====
 app.get('/api/geocode', async (req, res) => {
   try {
@@ -94,77 +121,49 @@ app.get('/api/geocode', async (req, res) => {
     let source = null;
 
     // --- Provider 1: Nominatim (OpenStreetMap) ---
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`;
-      const response = await fetch(url, {
-        headers: { 'User-Agent': 'LunaAstrologica/1.0' },
-        timeout: 8000
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data && data.length > 0) {
-          lat = parseFloat(data[0].lat);
-          lon = parseFloat(data[0].lon);
-          display_name = data[0].display_name;
-          source = 'nominatim';
-        }
-      }
-    } catch (e) {
-      console.warn('Nominatim failed:', e.message);
+    const nominatimData = await safeFetchJson(
+      `https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`,
+      { headers: { 'User-Agent': 'LunaAstrologica/1.0' } }
+    );
+    if (nominatimData && nominatimData.length > 0) {
+      lat = parseFloat(nominatimData[0].lat);
+      lon = parseFloat(nominatimData[0].lon);
+      display_name = nominatimData[0].display_name;
+      source = 'nominatim';
+      console.log(`Geocode Nominatim OK: ${city} -> ${lat}, ${lon}`);
     }
 
-    // --- Provider 2: BigDataCloud (free, no key needed for basic) ---
+    // --- Provider 2: Open-Meteo Geocoding (free, no key, molto affidabile) ---
     if (lat === null) {
-      try {
-        const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=it`;
-        // Nota: BigDataCloud non ha geocoding diretto per nome citta,
-        // quindi usiamo un fallback diverso
-      } catch (e) {
-        console.warn('BigDataCloud skipped');
+      const openMeteoData = await safeFetchJson(
+        `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=it&format=json`
+      );
+      if (openMeteoData && openMeteoData.results && openMeteoData.results.length > 0) {
+        lat = openMeteoData.results[0].latitude;
+        lon = openMeteoData.results[0].longitude;
+        display_name = `${openMeteoData.results[0].name}, ${openMeteoData.results[0].country || country || ''}`;
+        source = 'open-meteo';
+        console.log(`Geocode Open-Meteo OK: ${city} -> ${lat}, ${lon}`);
       }
     }
 
-    // --- Provider 3: GeoDB Cities (free tier) ---
-    if (lat === null) {
-      try {
-        const url = `https://wft-geo-db.p.rapidapi.com/v1/geo/cities?namePrefix=${encodeURIComponent(city)}&limit=1`;
-        const response = await fetch(url, {
+    // --- Provider 3: GeoDB Cities (RapidAPI) ---
+    if (lat === null && process.env.RAPIDAPI_KEY) {
+      const geoDbData = await safeFetchJson(
+        `https://wft-geo-db.p.rapidapi.com/v1/geo/cities?namePrefix=${encodeURIComponent(city)}&limit=1`,
+        {
           headers: {
-            'X-RapidAPI-Key': process.env.RAPIDAPI_KEY || '',
+            'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
             'X-RapidAPI-Host': 'wft-geo-db.p.rapidapi.com'
-          },
-          timeout: 8000
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (data.data && data.data.length > 0) {
-            lat = data.data[0].latitude;
-            lon = data.data[0].longitude;
-            display_name = `${data.data[0].city}, ${data.data[0].country}`;
-            source = 'geodb';
           }
         }
-      } catch (e) {
-        console.warn('GeoDB failed:', e.message);
-      }
-    }
-
-    // --- Provider 4: Open-Meteo Geocoding (free, no key) ---
-    if (lat === null) {
-      try {
-        const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=it&format=json`;
-        const response = await fetch(url, { timeout: 8000 });
-        if (response.ok) {
-          const data = await response.json();
-          if (data.results && data.results.length > 0) {
-            lat = data.results[0].latitude;
-            lon = data.results[0].longitude;
-            display_name = `${data.results[0].name}, ${data.results[0].country || country || ''}`;
-            source = 'open-meteo';
-          }
-        }
-      } catch (e) {
-        console.warn('Open-Meteo failed:', e.message);
+      );
+      if (geoDbData && geoDbData.data && geoDbData.data.length > 0) {
+        lat = geoDbData.data[0].latitude;
+        lon = geoDbData.data[0].longitude;
+        display_name = `${geoDbData.data[0].city}, ${geoDbData.data[0].country}`;
+        source = 'geodb';
+        console.log(`Geocode GeoDB OK: ${city} -> ${lat}, ${lon}`);
       }
     }
 
@@ -178,7 +177,7 @@ app.get('/api/geocode', async (req, res) => {
     const tzOffset = Math.round(lon / 15);
     const timezone = `Etc/GMT${tzOffset >= 0 ? '-' : '+'}${Math.abs(tzOffset)}`;
 
-    console.log(`Geocode OK [${source}]: ${city} -> ${lat}, ${lon}, tz=${timezone}`);
+    console.log(`Geocode FINAL [${source}]: ${city} -> lat=${lat}, lng=${lon}, tz=${timezone}`);
 
     res.json({
       lat,
@@ -361,14 +360,32 @@ app.post('/api/transits', async (req, res) => {
 
     if (pErr || !profile) return res.status(404).json({ error: 'Profilo non trovato' });
 
-    // Calcola JD natale
+    // FIX: proteggi birth_time null
+    const birthTime = profile.birth_time || '12:00';
+    const [hh, mm] = birthTime.split(':').map(Number);
+
+    // FIX: proteggi birth_date
+    if (!profile.birth_date) {
+      return res.status(400).json({ error: 'Data di nascita mancante nel profilo' });
+    }
     const [y, m, d] = profile.birth_date.split('-').map(Number);
-    const [hh, mm] = profile.birth_time.split(':').map(Number);
+
+    // FIX: proteggi timezone
     let tzOffset = 0;
-    if (profile.birth_timezone === 'Europe/Rome') tzOffset = 2;
-    else if (profile.birth_timezone.includes('GMT-1') || profile.birth_timezone.includes('CET')) tzOffset = 1;
+    if (profile.birth_timezone) {
+      if (profile.birth_timezone === 'Europe/Rome') tzOffset = 2;
+      else if (profile.birth_timezone.includes('GMT-1') || profile.birth_timezone.includes('CET')) tzOffset = 1;
+    }
+
     const utHour = hh - tzOffset + (mm / 60);
     const natalJD = swisseph.swe_julday(y, m, d, utHour, swisseph.SE_GREG_CAL);
+
+    // FIX: proteggi coordinate
+    const lat = Number(profile.birth_latitude);
+    const lng = Number(profile.birth_longitude);
+    if (!lat || !lng || isNaN(lat) || isNaN(lng)) {
+      return res.status(400).json({ error: 'Coordinate di nascita mancanti. Completa prima il geocoding.' });
+    }
 
     // Tema natale -- SINCRONO
     const natal = {};
@@ -390,7 +407,7 @@ app.post('/api/transits', async (req, res) => {
       if (lon !== null) natal[b.key] = lon;
     }
 
-    const houseResult = calcHousesSync(natalJD, Number(profile.birth_latitude), Number(profile.birth_longitude));
+    const houseResult = calcHousesSync(natalJD, lat, lng);
     if (houseResult) {
       natal.houses = houseResult.house;
       natal.ascendant = houseResult.ascendant;
