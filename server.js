@@ -1,11 +1,12 @@
 // ============================================================
-// RENDER SERVER — Luna Astrologica API
-// Swiss Ephemeris (swisseph npm) — precisione professionale reale
-// MODIFICATO: 
-//  - salva tema natale in natal_charts (upsert)
-//  - salva future_events (100 HIGH) in natal_charts.future_events JSONB
-//  - estrae top 3 in upcoming_events per Telegram
-//  - FIX: async sulla rotta natal-chart
+// RENDER SERVER -- Luna Astrologica API
+// Swiss Ephemeris (swisseph npm) -- precisione professionale reale
+// MODIFICATO:
+// - salva tema natale in natal_charts (upsert)
+// - salva future_events (100 HIGH) in natal_charts.future_events JSONB
+// - estrae top 3 in upcoming_events per Telegram
+// - FIX: async sulla rotta natal-chart
+// - FIX: geocoding robusto con fallback multipli
 // ============================================================
 
 const express = require('express');
@@ -79,28 +80,118 @@ function calcHousesSync(jd, lat, lng) {
   return result;
 }
 
-// ===== GEOCODING =====
+// ===== GEOCODING ROBUSTO con fallback =====
 app.get('/api/geocode', async (req, res) => {
   try {
     const city = req.query.city;
     const country = req.query.country;
     if (!city) return res.status(400).json({ error: 'Missing city' });
 
-    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(city + ',' + (country || ''))}&limit=1`;
-    const response = await fetch(url, { headers: { 'User-Agent': 'LunaAstrologica/1.0' } });
-    const data = await response.json();
+    const query = encodeURIComponent(city + ',' + (country || ''));
+    let lat = null;
+    let lon = null;
+    let display_name = null;
+    let source = null;
 
-    if (!data || !data.length) return res.status(404).json({ error: 'City not found' });
+    // --- Provider 1: Nominatim (OpenStreetMap) ---
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${query}&limit=1`;
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'LunaAstrologica/1.0' },
+        timeout: 8000
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.length > 0) {
+          lat = parseFloat(data[0].lat);
+          lon = parseFloat(data[0].lon);
+          display_name = data[0].display_name;
+          source = 'nominatim';
+        }
+      }
+    } catch (e) {
+      console.warn('Nominatim failed:', e.message);
+    }
 
-    const place = data[0];
-    const lat = parseFloat(place.lat);
-    const lon = parseFloat(place.lon);
+    // --- Provider 2: BigDataCloud (free, no key needed for basic) ---
+    if (lat === null) {
+      try {
+        const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?localityLanguage=it`;
+        // Nota: BigDataCloud non ha geocoding diretto per nome citta,
+        // quindi usiamo un fallback diverso
+      } catch (e) {
+        console.warn('BigDataCloud skipped');
+      }
+    }
+
+    // --- Provider 3: GeoDB Cities (free tier) ---
+    if (lat === null) {
+      try {
+        const url = `https://wft-geo-db.p.rapidapi.com/v1/geo/cities?namePrefix=${encodeURIComponent(city)}&limit=1`;
+        const response = await fetch(url, {
+          headers: {
+            'X-RapidAPI-Key': process.env.RAPIDAPI_KEY || '',
+            'X-RapidAPI-Host': 'wft-geo-db.p.rapidapi.com'
+          },
+          timeout: 8000
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.data && data.data.length > 0) {
+            lat = data.data[0].latitude;
+            lon = data.data[0].longitude;
+            display_name = `${data.data[0].city}, ${data.data[0].country}`;
+            source = 'geodb';
+          }
+        }
+      } catch (e) {
+        console.warn('GeoDB failed:', e.message);
+      }
+    }
+
+    // --- Provider 4: Open-Meteo Geocoding (free, no key) ---
+    if (lat === null) {
+      try {
+        const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=it&format=json`;
+        const response = await fetch(url, { timeout: 8000 });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.results && data.results.length > 0) {
+            lat = data.results[0].latitude;
+            lon = data.results[0].longitude;
+            display_name = `${data.results[0].name}, ${data.results[0].country || country || ''}`;
+            source = 'open-meteo';
+          }
+        }
+      } catch (e) {
+        console.warn('Open-Meteo failed:', e.message);
+      }
+    }
+
+    // --- Se ancora null, errore ---
+    if (lat === null || lon === null) {
+      console.error('All geocoding providers failed for:', city, country);
+      return res.status(404).json({ error: 'City not found', city, country });
+    }
+
+    // Calcolo timezone approssimativo basato su longitudine
     const tzOffset = Math.round(lon / 15);
+    const timezone = `Etc/GMT${tzOffset >= 0 ? '-' : '+'}${Math.abs(tzOffset)}`;
 
-    res.json({ lat, lng: lon, display_name: place.display_name, timezone: `Etc/GMT${tzOffset >= 0 ? '-' : '+'}${Math.abs(tzOffset)}`, tz_offset: tzOffset });
+    console.log(`Geocode OK [${source}]: ${city} -> ${lat}, ${lon}, tz=${timezone}`);
+
+    res.json({
+      lat,
+      lng: lon,
+      display_name: display_name || `${city}, ${country || ''}`,
+      timezone,
+      tz_offset: tzOffset,
+      source
+    });
+
   } catch (err) {
-    console.error('Geocode error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('Geocode fatal error:', err);
+    res.status(500).json({ error: err.message || 'Internal geocoding error' });
   }
 });
 
@@ -183,7 +274,7 @@ app.post('/api/natal-chart', async (req, res) => {
 
     console.log('Chart OK, planets:', planets.length, 'houses:', houses.length);
 
-    // 🌙 SALVA in natal_charts (upsert)
+    // SALVA in natal_charts (upsert)
     if (user_id) {
       try {
         const { error: upsertErr } = await supabase
@@ -208,7 +299,7 @@ app.post('/api/natal-chart', async (req, res) => {
         if (upsertErr) {
           console.error('Errore salvataggio natal_charts:', upsertErr);
         } else {
-          console.log('✅ Tema natale salvato in natal_charts per user:', user_id);
+          console.log('Tema natale salvato in natal_charts per user:', user_id);
         }
       } catch (dbErr) {
         console.error('DB error natal_charts:', dbErr);
@@ -279,7 +370,7 @@ app.post('/api/transits', async (req, res) => {
     const utHour = hh - tzOffset + (mm / 60);
     const natalJD = swisseph.swe_julday(y, m, d, utHour, swisseph.SE_GREG_CAL);
 
-    // Tema natale — SINCRONO
+    // Tema natale -- SINCRONO
     const natal = {};
     const bodies = [
       { key: 'sun', id: swisseph.SE_SUN },
@@ -334,7 +425,7 @@ app.post('/api/transits', async (req, res) => {
       return 1;
     }
 
-    // Calcola transiti 90 giorni — SINCRONO
+    // Calcola transiti 90 giorni -- SINCRONO
     const today = new Date();
     const allEvents = [];
     const daily = [];
@@ -456,7 +547,7 @@ app.post('/api/transits', async (req, res) => {
       }
     }
 
-    // 🌙 ORDINA per rilevanza e prendi top 3
+    // ORDINA per rilevanza e prendi top 3
     const PRIORITY = {
       'pluto': 10, 'neptune': 9, 'uranus': 8, 'saturn': 7,
       'jupiter': 6, 'mars': 5, 'sun': 4, 'venus': 3,
@@ -468,10 +559,10 @@ app.post('/api/transits', async (req, res) => {
       .map(e => ({
         ...e,
         score: (PRIORITY[e.planet] || 0) +
-               (e.aspect_type === 'opposizione' ? 5 :
-                e.aspect_type === 'quadrato' ? 4 :
-                e.aspect_type === 'congiunzione' ? 3 :
-                e.event_type === 'planet_enters_house' ? 2 : 1)
+          (e.aspect_type === 'opposizione' ? 5 :
+           e.aspect_type === 'quadrato' ? 4 :
+           e.aspect_type === 'congiunzione' ? 3 :
+           e.event_type === 'planet_enters_house' ? 2 : 1)
       }))
       .sort((a, b) => b.score - a.score);
 
@@ -479,7 +570,7 @@ app.post('/api/transits', async (req, res) => {
 
     console.log(`Eventi totali: ${allEvents.length}, HIGH: ${highEvents.length}, Top 3: ${top3Events.length}`);
 
-    // 🌙 SALVA future_events (tutti HIGH) in natal_charts
+    // SALVA future_events (tutti HIGH) in natal_charts
     try {
       const futureEvents = highEvents.map(e => ({
         event_date: e.event_date,
@@ -505,13 +596,13 @@ app.post('/api/transits', async (req, res) => {
       if (updateErr) {
         console.error('Errore salvataggio future_events:', updateErr);
       } else {
-        console.log(`✅ Salvati ${futureEvents.length} future_events in natal_charts`);
+        console.log(`Salvati ${futureEvents.length} future_events in natal_charts`);
       }
     } catch (e) {
       console.error('DB error future_events:', e);
     }
 
-    // 🌙 SALVA top 3 in upcoming_events per Telegram
+    // SALVA top 3 in upcoming_events per Telegram
     if (top3Events.length > 0) {
       try {
         // Cancella vecchi upcoming_events
@@ -531,7 +622,7 @@ app.post('/api/transits', async (req, res) => {
         if (insErr) {
           console.error('Errore upcoming_events:', insErr);
         } else {
-          console.log(`✅ Salvati ${upcoming.length} upcoming_events per Telegram`);
+          console.log(`Salvati ${upcoming.length} upcoming_events per Telegram`);
         }
       } catch (e) {
         console.error('DB error upcoming_events:', e);
@@ -559,11 +650,11 @@ app.post('/api/transits', async (req, res) => {
   }
 });
 
-// GET di test per verificare che l'endpoint è vivo
+// GET di test per verificare che l'endpoint e vivo
 app.get('/api/transits', (req, res) => {
   res.json({ status: 'Transits API attivo', use: 'POST /api/transits con body { user_id }' });
 });
 
 app.listen(PORT, () => {
-  console.log(`🌙 Luna Astrologica API running on port ${PORT}`);
+  console.log(`Luna Astrologica API running on port ${PORT}`);
 });
