@@ -1081,7 +1081,7 @@ Restituisci ESATTAMENTE questo JSON:
           exact_timestamp: evt.date,
           orb_degrees: evt.orb,
           title: evt.title,
-          description: evt.description,
+          description: evt.description || evt.title || '',
           advice: interp.consiglio_difesa || '',
           interpretation_ai: interp.interpretation_ai || '',
           consiglio_difesa: interp.consiglio_difesa || '',
