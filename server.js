@@ -1073,17 +1073,16 @@ Restituisci ESATTAMENTE questo JSON:
 
         return {
           user_id,
-          event_type: evt.title,
+          event_type: evt.title || `${evt.planet} ${evt.aspect} ${evt.target}`,
           severity: evt.severity,
           planet: evt.planet,
-          target_planet: evt.target,
+          target: evt.target,  // <-- era target_planet, ma il DB ha "target"
           house: evt.house,
           aspect_type: evt.aspect,
           event_date: evt.date,
           exact_timestamp: evt.date,
-          orb_degrees: evt.orb,
-          title: evt.title,
-          description: evt.description || evt.title || '',
+          orb: evt.orb,  // <-- era orb_degrees, ma il DB ha "orb"
+          description: evt.description || '',
           advice: interp.consiglio_difesa || '',
           interpretation_ai: interp.interpretation_ai || '',
           consiglio_difesa: interp.consiglio_difesa || '',
