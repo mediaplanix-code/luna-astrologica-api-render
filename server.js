@@ -731,17 +731,19 @@ app.post('/api/generate-dossier', requireSupabase, async (req, res) => {
     if (!user_id) return res.status(400).json({ error: 'user_id obbligatorio' });
 
     // 1. Recupera tema natale e profilo
-    const { data: chart, error: chartErr } = await supabase
+    const { data: chartRows, error: chartErr } = await supabase
       .from('natal_charts')
       .select('*')
       .eq('user_id', user_id)
       .order('calculated_at', { ascending: false })
       .limit(1);
     
-    if (chartErr || !chart || chart.length === 0) {
+    if (chartErr || !chartRows || chartRows.length === 0) {
       console.error('Tema natale non trovato per user_id:', user_id, 'Errore:', chartErr);
       throw new Error('Tema natale non trovato per questo utente');
     }
+    
+    const chart = chartRows[0]; // <-- Estrai il primo elemento dall'array
 
     const { data: profile, error: profErr } = await supabase
       .from('profiles')
