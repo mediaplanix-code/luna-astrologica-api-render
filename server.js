@@ -1149,8 +1149,8 @@ Restituisci ESATTAMENTE questo JSON:
     const nextEventsPayload = (top3 || []).map(e => ({
       event_id: e.id,
       event_date: e.event_date,
-      title: e.title,
-      description: e.description,
+      title: e.event_type || e.title || '',  // <-- il DB non ha "title", usa event_type
+      description: e.description || '',
       interpretation_ai: e.interpretation_ai,
       consiglio_difesa: e.consiglio_difesa,
       telegram_message_text: e.telegram_message_text,
