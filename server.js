@@ -735,6 +735,8 @@ app.post('/api/generate-dossier', requireSupabase, async (req, res) => {
       .from('natal_charts')
       .select('*')
       .eq('user_id', user_id)
+      .order('calculated_at', { ascending: false })
+      .limit(1)
       .single();
 
     if (chartErr || !chart) throw new Error('Tema natale non trovato per questo utente');
