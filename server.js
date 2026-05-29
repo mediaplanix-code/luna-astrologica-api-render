@@ -736,10 +736,12 @@ app.post('/api/generate-dossier', requireSupabase, async (req, res) => {
       .select('*')
       .eq('user_id', user_id)
       .order('calculated_at', { ascending: false })
-      .limit(1)
-      .single();
-
-    if (chartErr || !chart) throw new Error('Tema natale non trovato per questo utente');
+      .limit(1);
+    
+    if (chartErr || !chart || chart.length === 0) {
+      console.error('Tema natale non trovato per user_id:', user_id, 'Errore:', chartErr);
+      throw new Error('Tema natale non trovato per questo utente');
+    }
 
     const { data: profile, error: profErr } = await supabase
       .from('profiles')
