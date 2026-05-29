@@ -1,0 +1,19 @@
+{
+  "name": "luna-astrologica-api",
+  "version": "1.0.0",
+  "description": "Luna Astrologica API with Swiss Ephemeris",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "swisseph": "^0.5.17",
+    "node-fetch": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
