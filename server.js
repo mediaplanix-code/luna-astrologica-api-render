@@ -88,6 +88,50 @@ function calcHousesSync(jd, lat, lng) {
   }
 }
 
+// ===== DST HISTORICAL OFFSETS (semplificato per timezone IANA comuni) =====
+function getHistoricalOffset(timezone, dateStr) {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const d = new Date(year, month - 1, day);
+  const monthDay = month * 100 + day; // es. 707 per 7 luglio
+
+  // Italy / Europe/Rome DST history (simplified)
+  if (timezone === 'Europe/Rome' || timezone === 'Europe/Paris') {
+    if (year < 1916) return 0; // No DST
+    if (year >= 1966 && year <= 1970) {
+      // 1966-1970: DST last Sunday March -> last Sunday September
+      // Simplified: assume summer = DST (+2), winter = standard (+1)
+      return (monthDay >= 327 && monthDay <= 926) ? 2 : 1;
+    }
+    if (year >= 1971 && year <= 1979) {
+      // 1971-1979: last Sunday March -> last Sunday September
+      return (monthDay >= 325 && monthDay <= 924) ? 2 : 1;
+    }
+    if (year >= 1980) {
+      // 1980+: last Sunday March -> last Sunday October
+      return (monthDay >= 325 && monthDay <= 1026) ? 2 : 1;
+    }
+    // 1916-1965: DST era irregolare, usiamo +1 come fallback sicuro
+    return 1;
+  }
+
+  if (timezone === 'Europe/London') {
+    return (monthDay >= 325 && monthDay <= 1026) ? 1 : 0;
+  }
+
+  if (timezone === 'America/New_York') {
+    return (monthDay >= 310 && monthDay <= 1103) ? -4 : -5;
+  }
+
+  // Fallback: parse Etc/GMT format
+  if (timezone && timezone.startsWith('Etc/GMT')) {
+    const match = timezone.match(/GMT([+-]?\d+)/);
+    if (match) return parseInt(match[1]);
+  }
+
+  // Ultimate fallback
+  return 1;
+}
+
 async function safeFetchJson(url, options = {}) {
   try {
     const controller = new AbortController();
@@ -151,10 +195,35 @@ app.get('/api/geocode', async (req, res) => {
       return res.status(404).json({ error: 'City not found', city, country });
     }
 
-    const tzOffset = Math.round(lon / 15);
-    const timezone = `Etc/GMT${tzOffset >= 0 ? '-' : '+'}${Math.abs(tzOffset)}`;
+    // Mappa paese -> timezone IANA (più preciso di lon/15)
+    let timezone = null;
+    const countryUpper = (country || '').toUpperCase();
+    const COUNTRY_TZ = {
+      'IT': 'Europe/Rome',
+      'FR': 'Europe/Paris',
+      'ES': 'Europe/Madrid',
+      'DE': 'Europe/Berlin',
+      'UK': 'Europe/London',
+      'GB': 'Europe/London',
+      'US': 'America/New_York',
+      'CA': 'America/Toronto',
+      'AU': 'Australia/Sydney',
+      'BR': 'America/Sao_Paulo',
+      'AR': 'America/Argentina/Buenos_Aires',
+      'JP': 'Asia/Tokyo',
+      'IN': 'Asia/Kolkata',
+      'CN': 'Asia/Shanghai',
+      'RU': 'Europe/Moscow',
+    };
 
-    res.json({ lat, lng: lon, display_name: display_name || `${city}, ${country || ''}`, timezone, tz_offset: tzOffset, source });
+    if (COUNTRY_TZ[countryUpper]) {
+      timezone = COUNTRY_TZ[countryUpper];
+    } else {
+      const tzOffset = Math.round(lon / 15);
+      timezone = `Etc/GMT${tzOffset >= 0 ? '-' : '+'}${Math.abs(tzOffset)}`;
+    }
+
+    res.json({ lat, lng: lon, display_name: display_name || `${city}, ${country || ''}`, timezone, tz_offset: getHistoricalOffset(timezone, new Date().toISOString().split('T')[0]), source });
   } catch (err) {
     console.error('Geocode fatal error:', err);
     res.status(500).json({ error: err.message || 'Internal geocoding error' });
@@ -170,17 +239,13 @@ app.post('/api/natal-chart', async (req, res) => {
     }
 
     const [year, month, day] = birthDate.split('-').map(Number);
-    const [hour, minute] = (birthTime || '12:00').split(':').map(Number);
+    const timeParts = (birthTime || '12:00').split(':');
+    const hour = parseInt(timeParts[0]) || 12;
+    const minute = parseInt(timeParts[1]) || 0;
 
-    let tzOffset = 0;
-    if (timezone) {
-      if (timezone === 'Europe/Rome' || timezone === 'Europe/Paris') tzOffset = 1;
-      else if (timezone === 'Europe/London') tzOffset = 0;
-      else if (timezone === 'America/New_York') tzOffset = -5;
-      else tzOffset = Math.round(lng / 15);
-    } else {
-      tzOffset = Math.round(lng / 15);
-    }
+    // Usa getHistoricalOffset per DST corretto
+    const tzOffset = getHistoricalOffset(timezone, birthDate);
+    console.log(`Natal chart: date=${birthDate}, time=${birthTime}, tz=${timezone}, offset=${tzOffset}`);
 
     const utHour = hour - tzOffset + (minute / 60);
     const jd = swisseph.swe_julday(year, month, day, utHour, swisseph.SE_GREG_CAL);
@@ -339,18 +404,13 @@ app.post('/api/transits', async (req, res) => {
     // 3. Parsing data e ora
     const [y, m, d] = profile.birth_date.split('-').map(Number);
     const birthTime = profile.birth_time || '12:00';
-    const [hh, mm] = birthTime.split(':').map(Number);
+    const timeParts = birthTime.split(':');
+    const hh = parseInt(timeParts[0]) || 12;
+    const mm = parseInt(timeParts[1]) || 0;
 
-    // 4. Timezone
-    let tzOffset = 0;
-    if (profile.birth_timezone) {
-      if (profile.birth_timezone === 'Europe/Rome') tzOffset = 2;
-      else if (profile.birth_timezone.includes('GMT-1') || profile.birth_timezone.includes('CET')) tzOffset = 1;
-      else if (profile.birth_timezone.includes('GMT')) {
-        const match = profile.birth_timezone.match(/GMT([+-]?\d+)/);
-        if (match) tzOffset = parseInt(match[1]);
-      }
-    }
+    // 4. Timezone con DST storico
+    const tzOffset = getHistoricalOffset(profile.birth_timezone, profile.birth_date);
+    console.log(`Transits: date=${profile.birth_date}, time=${birthTime}, tz=${profile.birth_timezone}, offset=${tzOffset}`);
 
     const utHour = hh - tzOffset + (mm / 60);
     const natalJD = swisseph.swe_julday(y, m, d, utHour, swisseph.SE_GREG_CAL);
@@ -598,7 +658,7 @@ app.post('/api/transits', async (req, res) => {
           const upcoming = top3Events.map(e => ({
             user_id,
             event_date: e.event_date,
-            event_type: e.event_type,          // <-- FIX: aggiunto
+            event_type: e.event_type,
             notify_at: e.exact_timestamp,
             telegram_sent: false,
             title: e.title,
