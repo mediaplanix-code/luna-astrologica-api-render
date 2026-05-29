@@ -598,6 +598,7 @@ app.post('/api/transits', async (req, res) => {
           const upcoming = top3Events.map(e => ({
             user_id,
             event_date: e.event_date,
+            event_type: e.event_type,          // <-- FIX: aggiunto
             notify_at: e.exact_timestamp,
             telegram_sent: false,
             title: e.title,
