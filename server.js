@@ -88,30 +88,33 @@ function calcHousesSync(jd, lat, lng) {
   }
 }
 
-// ===== DST HISTORICAL OFFSETS (semplificato per timezone IANA comuni) =====
+// ===== DST HISTORICAL OFFSETS (corretto per Italia 1916-1965) =====
 function getHistoricalOffset(timezone, dateStr) {
   const [year, month, day] = dateStr.split('-').map(Number);
-  const d = new Date(year, month - 1, day);
   const monthDay = month * 100 + day; // es. 707 per 7 luglio
 
-  // Italy / Europe/Rome DST history (simplified)
+  // Italy / Europe/Rome DST history
   if (timezone === 'Europe/Rome' || timezone === 'Europe/Paris') {
     if (year < 1916) return 0; // No DST
+
+    // 1916-1965: DST attivo in Italia (con pause durante le guerre)
+    // Semplificazione robusta: estate = +2, inverno = +1
+    if (year >= 1916 && year <= 1965) {
+      return (monthDay >= 325 && monthDay <= 926) ? 2 : 1;
+    }
+
+    // 1966-1970: DST last Sunday March -> last Sunday September
     if (year >= 1966 && year <= 1970) {
-      // 1966-1970: DST last Sunday March -> last Sunday September
-      // Simplified: assume summer = DST (+2), winter = standard (+1)
       return (monthDay >= 327 && monthDay <= 926) ? 2 : 1;
     }
+
+    // 1971-1979: last Sunday March -> last Sunday September
     if (year >= 1971 && year <= 1979) {
-      // 1971-1979: last Sunday March -> last Sunday September
       return (monthDay >= 325 && monthDay <= 924) ? 2 : 1;
     }
-    if (year >= 1980) {
-      // 1980+: last Sunday March -> last Sunday October
-      return (monthDay >= 325 && monthDay <= 1026) ? 2 : 1;
-    }
-    // 1916-1965: DST era irregolare, usiamo +1 come fallback sicuro
-    return 1;
+
+    // 1980+: last Sunday March -> last Sunday October
+    return (monthDay >= 325 && monthDay <= 1026) ? 2 : 1;
   }
 
   if (timezone === 'Europe/London') {
@@ -195,7 +198,7 @@ app.get('/api/geocode', async (req, res) => {
       return res.status(404).json({ error: 'City not found', city, country });
     }
 
-    // Mappa paese -> timezone IANA (più preciso di lon/15)
+    // Mappa paese -> timezone IANA
     let timezone = null;
     const countryUpper = (country || '').toUpperCase();
     const COUNTRY_TZ = {
@@ -243,7 +246,6 @@ app.post('/api/natal-chart', async (req, res) => {
     const hour = parseInt(timeParts[0]) || 12;
     const minute = parseInt(timeParts[1]) || 0;
 
-    // Usa getHistoricalOffset per DST corretto
     const tzOffset = getHistoricalOffset(timezone, birthDate);
     console.log(`Natal chart: date=${birthDate}, time=${birthTime}, tz=${timezone}, offset=${tzOffset}`);
 
@@ -298,7 +300,7 @@ app.post('/api/natal-chart', async (req, res) => {
       houses: houses
     };
 
-    // SALVA in natal_charts (upsert) -- con gestione errori
+    // SALVA in natal_charts (upsert)
     if (user_id && supabase) {
       try {
         const { error: upsertErr } = await supabase
@@ -617,7 +619,7 @@ app.post('/api/transits', async (req, res) => {
 
     console.log(`Transiti: ${allEvents.length} eventi, ${highEvents.length} HIGH, top3: ${top3Events.length}`);
 
-    // 9. Salva future_events in natal_charts (con gestione errori)
+    // 9. Salva future_events in natal_charts
     if (supabase) {
       try {
         const futureEvents = highEvents.map(e => ({
