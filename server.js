@@ -158,6 +158,142 @@ async function safeFetchJson(url, options = {}) {
   }
 }
 
+// ===== DOSSIER ASTROLOGICO (funzione interna) =====
+async function generateDossier(user_id) {
+  try {
+    if (!supabase) return;
+    if (!process.env.OPENAI_API_KEY) {
+      console.warn('OPENAI_API_KEY mancante, dossier saltato');
+      return;
+    }
+
+    // 1. Leggi tema natale
+    const { data: natalChart, error: chartErr } = await supabase
+      .from('natal_charts')
+      .select('*')
+      .eq('user_id', user_id)
+      .single();
+
+    if (chartErr || !natalChart) {
+      console.error('Dossier: tema natale non trovato');
+      return;
+    }
+
+    if (natalChart.dossier_astrologico) {
+      console.log('Dossier già esistente per user:', user_id);
+      return;
+    }
+
+    // 2. Leggi profilo
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', user_id)
+      .single();
+    const nome = profile?.full_name?.split(' ')[0] || 'amico';
+
+    // 3. Prepara dati
+    const planets = natalChart.planets || [];
+    const houses = natalChart.houses || [];
+    const asc = natalChart.points?.ascendant || natalChart.ascendant;
+    const mc = natalChart.points?.mc || natalChart.mc;
+    const moonSign = natalChart.points?.moon_sign || natalChart.moonSign;
+
+    const planetDesc = planets.map(p => 
+      `${p.key}: ${p.sign} ${p.degree}°${p.minutes || 0}'`
+    ).join('\n');
+
+    const houseDesc = houses.map((h, i) => 
+      `Casa ${i + 1}: ${h.name} ${h.degree || 0}°${h.minutes || 0}'`
+    ).join('\n');
+
+    // 4. Prompt Luna
+    const prompt = `Sei Luna, un'astrologa professionista con 30 anni di esperienza. Hai appena calcolato il tema natale di ${nome} e devi scrivere il suo dossier astrologico personale — un documento interno che userai come base di conoscenza per tutte le future conversazioni con lui/lei.
+
+Tono: profondo, misterioso ma accogliente, mai giudicante. Parla come se conoscessi ${nome} da anni. Non usare gergo tecnico a meno che non sia necessario. Sii calda, umana, con un filo di ironia dolce quando appropriato.
+
+DATI TEMA NATALE:
+${planetDesc}
+
+CASE:
+${houseDesc}
+
+Ascendente: ${asc?.name || '?'} ${asc?.degree || 0}°${asc?.minutes || 0}'
+MC: ${mc?.name || '?'} ${mc?.degree || 0}°${mc?.minutes || 0}'
+Luna: ${moonSign || '?'}
+
+Genera un JSON con queste chiavi:
+- essenza: stringa (2-3 frasi)
+- punti_forti: array di 4-6 stringhe
+- punti_critici: array di 3-5 stringhe
+- amore: stringa
+- denaro: stringa
+- lavoro: stringa
+- carriera: stringa
+- salute: stringa
+- amici: stringa
+- famiglia: stringa
+- viaggi: stringa
+- partner: stringa
+- transiti_sensibili: array di 4-6 stringhe
+- tono_vocale: stringa (istruzioni per l'AI)
+
+Ogni sezione deve essere narrativa, personale, citabile in conversazione.`;
+
+    // 5. Chiama OpenAI
+    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: 'Sei Luna, astrologa professionista. Rispondi SOLO con un JSON valido, senza markdown, senza spiegazioni.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.8,
+        max_tokens: 2500
+      })
+    });
+
+    if (!openaiRes.ok) {
+      console.error('OpenAI error:', await openaiRes.text());
+      return;
+    }
+
+    const openaiData = await openaiRes.json();
+    const rawContent = openaiData.choices?.[0]?.message?.content || '';
+
+    let dossier;
+    try {
+      const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+      dossier = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(rawContent);
+    } catch (e) {
+      console.error('JSON parse error:', e.message);
+      return;
+    }
+
+    // 6. Salva
+    const { error: saveErr } = await supabase
+      .from('natal_charts')
+      .update({
+        dossier_astrologico: dossier,
+        updated_at: new Date().toISOString()
+      })
+      .eq('user_id', user_id);
+
+    if (saveErr) {
+      console.error('Errore salvataggio dossier:', saveErr.message);
+    } else {
+      console.log(`✅ Dossier generato per user ${user_id}`);
+    }
+  } catch (err) {
+    console.error('Dossier error:', err.message);
+  }
+}
+
 // ===== GEOCODING =====
 app.get('/api/geocode', async (req, res) => {
   try {
@@ -324,19 +460,6 @@ app.post('/api/natal-chart', async (req, res) => {
 
         if (upsertErr) {
           console.error('Errore salvataggio natal_charts:', upsertErr.message);
-        } else {
-          // ─── GENERA DOSSIER IN BACKGROUND ───
-          console.log('🌙 Avvio generazione dossier per user:', user_id);
-          fetch(`http://localhost:${PORT}/api/generate-dossier`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id })
-          }).then(r => {
-            if (r.ok) console.log('✅ Dossier generato in background');
-            else console.warn('⚠️ Dossier background fallito');
-          }).catch(e => {
-            console.warn('⚠️ Dossier background error:', e.message);
-          });
         }
       } catch (dbErr) {
         console.error('DB error natal_charts:', dbErr.message);
@@ -349,174 +472,6 @@ app.post('/api/natal-chart', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// ===== GENERAZIONE DOSSIER ASTROLOGICO =====
-app.post('/api/generate-dossier', async (req, res) => {
-  try {
-    const { user_id } = req.body;
-    if (!user_id) return res.status(400).json({ error: 'user_id required' });
-    if (!supabase) return res.status(500).json({ error: 'Database not available' });
-    if (!process.env.OPENAI_API_KEY) return res.status(500).json({ error: 'OpenAI API key not configured' });
-
-    // 1. Leggi tema natale
-    const { data: natalChart, error: chartErr } = await supabase
-      .from('natal_charts')
-      .select('*')
-      .eq('user_id', user_id)
-      .single();
-
-    if (chartErr || !natalChart) {
-      console.error('Dossier: tema natale non trovato:', chartErr?.message);
-      return res.status(404).json({ error: 'Tema natale non trovato' });
-    }
-
-    // Se il dossier esiste già, ritorna
-    if (natalChart.dossier_astrologico) {
-      return res.json({ status: 'already_exists', message: 'Dossier già generato' });
-    }
-
-    // 2. Leggi profilo per nome
-    const { data: profile, error: profErr } = await supabase
-      .from('profiles')
-      .select('full_name, birth_date, birth_city, birth_country')
-      .eq('id', user_id)
-      .single();
-
-    const nome = profile?.full_name?.split(' ')[0] || 'amico';
-
-    // 3. Prepara i dati astrologici per il prompt
-    const planets = natalChart.planets || [];
-    const houses = natalChart.houses || [];
-    const asc = natalChart.points?.ascendant || natalChart.ascendant;
-    const mc = natalChart.points?.mc || natalChart.mc;
-    const moonSign = natalChart.points?.moon_sign || natalChart.moonSign;
-
-    const planetDescriptions = planets.map(p => {
-      return `${p.key}: ${p.sign} ${p.degree}°${p.minutes || 0}' (Casa ${getHouseForPlanet(p, houses)})`;
-    }).join('\n');
-
-    const houseDescriptions = houses.map((h, i) => {
-      return `Casa ${i + 1}: ${h.name} ${h.degree || 0}°${h.minutes || 0}'`;
-    }).join('\n');
-
-    // 4. Prompt per GPT-4o — tono Luna, astrologa femminile
-    const prompt = `Sei Luna, un'astrologa professionista con 30 anni di esperienza. Hai appena calcolato il tema natale di ${nome} e devi scrivere il suo dossier astrologico personale — un documento interno che userai come base di conoscenza per tutte le future conversazioni con lui/lei.
-
-Tono: profondo, misterioso ma accogliente, mai giudicante. Parla come se conoscessi ${nome} da anni. Non usare gergo tecnico a meno che non sia necessario. Sii calda, umana, con un filo di ironia dolce quando appropriato.
-
-DATI TEMA NATALE:
-${planetDescriptions}
-
-CASE:
-${houseDescriptions}
-
-Ascendente: ${asc?.name || '?'} ${asc?.degree || 0}°${asc?.minutes || 0}'
-MC (Medio Cielo): ${mc?.name || '?'} ${mc?.degree || 0}°${mc?.minutes || 0}'
-Luna: ${moonSign || '?'}
-
-Genera un JSON con queste chiavi:
-- essenza: stringa (2-3 frasi che catturano l'anima del tema)
-- punti_forti: array di 4-6 stringhe
-- punti_critici: array di 3-5 stringhe
-- amore: stringa (interpretazione relazionale, come Luna parlerebbe al cliente)
-- denaro: stringa
-- lavoro: stringa
-- carriera: stringa
-- salute: stringa
-- amici: stringa
-- famiglia: stringa
-- viaggi: stringa
-- partner: stringa
-- transiti_sensibili: array di 4-6 stringhe (punti deboli da monitorare)
-- tono_vocale: stringa (istruzioni per l'AI su come parlare a questo cliente specifico)
-
-Ogni sezione deve essere narrativa, personale, citabile in conversazione. Non elencare posizioni astrali — interpreta il significato psicologico e spirituale.`;
-
-    // 5. Chiama OpenAI
-    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: 'Sei Luna, astrologa professionista. Rispondi SOLO con un JSON valido, senza markdown, senza spiegazioni.' },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.8,
-        max_tokens: 2500
-      })
-    });
-
-    if (!openaiRes.ok) {
-      const errText = await openaiRes.text();
-      console.error('OpenAI error:', errText);
-      return res.status(502).json({ error: 'OpenAI API error', details: errText });
-    }
-
-    const openaiData = await openaiRes.json();
-    const rawContent = openaiData.choices?.[0]?.message?.content || '';
-
-    // Estrai JSON dalla risposta
-    let dossier;
-    try {
-      const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        dossier = JSON.parse(jsonMatch[0]);
-      } else {
-        dossier = JSON.parse(rawContent);
-      }
-    } catch (parseErr) {
-      console.error('JSON parse error:', parseErr.message, 'Raw:', rawContent.substring(0, 500));
-      return res.status(500).json({ error: 'Failed to parse dossier JSON' });
-    }
-
-    // 6. Salva in natal_charts
-    const { error: saveErr } = await supabase
-      .from('natal_charts')
-      .update({
-        dossier_astrologico: dossier,
-        updated_at: new Date().toISOString()
-      })
-      .eq('user_id', user_id);
-
-    if (saveErr) {
-      console.error('Errore salvataggio dossier:', saveErr.message);
-      return res.status(500).json({ error: 'Failed to save dossier' });
-    }
-
-    console.log(`✅ Dossier generato per user ${user_id}`);
-    res.json({ status: 'generated', message: 'Dossier astrologico creato' });
-
-  } catch (err) {
-    console.error('Dossier FATAL error:', err);
-    res.status(500).json({ error: err.message || 'Errore generazione dossier' });
-  }
-});
-
-// Helper: trova casa di un pianeta
-function getHouseForPlanet(planet, houses) {
-  if (!houses || houses.length !== 12 || !planet.lon !== undefined) return '?';
-  const lon = (planet.lon !== undefined) ? planet.lon : (({
-    'Ariete': 0, 'Toro': 30, 'Gemelli': 60, 'Cancro': 90, 'Leone': 120, 'Vergine': 150,
-    'Bilancia': 180, 'Scorpione': 210, 'Sagittario': 240, 'Capricorno': 270, 'Acquario': 300, 'Pesci': 330
-  }[planet.sign] || 0) + (planet.degree || 0) + ((planet.minutes || 0) / 60));
-
-  const SIGN_LONG = { 'Ariete': 0, 'Toro': 30, 'Gemelli': 60, 'Cancro': 90, 'Leone': 120, 'Vergine': 150, 'Bilancia': 180, 'Scorpione': 210, 'Sagittario': 240, 'Capricorno': 270, 'Acquario': 300, 'Pesci': 330 };
-  const houseLons = houses.map(h => (SIGN_LONG[h.name] || 0) + (h.degree || 0) + ((h.minutes || 0) / 60));
-
-  for (let i = 0; i < 12; i++) {
-    let start = houseLons[i];
-    let end = houseLons[(i + 1) % 12];
-    let check = lon;
-    if (start > end) { if (check < start) check += 360; end += 360; }
-    else if (start > 270 && check < 90) check += 360;
-    if (check >= start && check < end) return i + 1;
-  }
-  return 1;
-}
 
 // ===== HEALTH CHECK =====
 app.get('/', (req, res) => {
