@@ -10,6 +10,8 @@ const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const fetch = require('node-fetch');
 
+const telegramBot = require('./telegram-bot');
+
 const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
@@ -22,6 +24,14 @@ try {
     process.env.SUPABASE_SERVICE_ROLE_KEY
   );
   console.log('Supabase client initialized');
+
+// Inizializza bot Telegram
+try {
+  telegramBot.initTelegram(supabase, process.env.TELEGRAM_BOT_TOKEN);
+  console.log('Telegram bot initialized');
+} catch (e) {
+  console.error('Telegram init failed:', e.message);
+}
 } catch (e) {
   console.error('Supabase init failed:', e.message);
 }
@@ -155,142 +165,6 @@ async function safeFetchJson(url, options = {}) {
   } catch (err) {
     console.warn(`Fetch error for ${url}:`, err.message);
     return null;
-  }
-}
-
-// ===== DOSSIER ASTROLOGICO (funzione interna) =====
-async function generateDossier(user_id) {
-  try {
-    if (!supabase) return;
-    if (!process.env.OPENAI_API_KEY) {
-      console.warn('OPENAI_API_KEY mancante, dossier saltato');
-      return;
-    }
-
-    // 1. Leggi tema natale
-    const { data: natalChart, error: chartErr } = await supabase
-      .from('natal_charts')
-      .select('*')
-      .eq('user_id', user_id)
-      .single();
-
-    if (chartErr || !natalChart) {
-      console.error('Dossier: tema natale non trovato');
-      return;
-    }
-
-    if (natalChart.dossier_astrologico) {
-      console.log('Dossier già esistente per user:', user_id);
-      return;
-    }
-
-    // 2. Leggi profilo
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('full_name')
-      .eq('id', user_id)
-      .single();
-    const nome = profile?.full_name?.split(' ')[0] || 'amico';
-
-    // 3. Prepara dati
-    const planets = natalChart.planets || [];
-    const houses = natalChart.houses || [];
-    const asc = natalChart.points?.ascendant || natalChart.ascendant;
-    const mc = natalChart.points?.mc || natalChart.mc;
-    const moonSign = natalChart.points?.moon_sign || natalChart.moonSign;
-
-    const planetDesc = planets.map(p => 
-      `${p.key}: ${p.sign} ${p.degree}°${p.minutes || 0}'`
-    ).join('\n');
-
-    const houseDesc = houses.map((h, i) => 
-      `Casa ${i + 1}: ${h.name} ${h.degree || 0}°${h.minutes || 0}'`
-    ).join('\n');
-
-    // 4. Prompt Luna
-    const prompt = `Sei Luna, un'astrologa professionista con 30 anni di esperienza. Hai appena calcolato il tema natale di ${nome} e devi scrivere il suo dossier astrologico personale — un documento interno che userai come base di conoscenza per tutte le future conversazioni con lui/lei.
-
-Tono: profondo, misterioso ma accogliente, mai giudicante. Parla come se conoscessi ${nome} da anni. Non usare gergo tecnico a meno che non sia necessario. Sii calda, umana, con un filo di ironia dolce quando appropriato.
-
-DATI TEMA NATALE:
-${planetDesc}
-
-CASE:
-${houseDesc}
-
-Ascendente: ${asc?.name || '?'} ${asc?.degree || 0}°${asc?.minutes || 0}'
-MC: ${mc?.name || '?'} ${mc?.degree || 0}°${mc?.minutes || 0}'
-Luna: ${moonSign || '?'}
-
-Genera un JSON con queste chiavi:
-- essenza: stringa (2-3 frasi)
-- punti_forti: array di 4-6 stringhe
-- punti_critici: array di 3-5 stringhe
-- amore: stringa
-- denaro: stringa
-- lavoro: stringa
-- carriera: stringa
-- salute: stringa
-- amici: stringa
-- famiglia: stringa
-- viaggi: stringa
-- partner: stringa
-- transiti_sensibili: array di 4-6 stringhe
-- tono_vocale: stringa (istruzioni per l'AI)
-
-Ogni sezione deve essere narrativa, personale, citabile in conversazione.`;
-
-    // 5. Chiama OpenAI
-    const openaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          { role: 'system', content: 'Sei Luna, astrologa professionista. Rispondi SOLO con un JSON valido, senza markdown, senza spiegazioni.' },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.8,
-        max_tokens: 2500
-      })
-    });
-
-    if (!openaiRes.ok) {
-      console.error('OpenAI error:', await openaiRes.text());
-      return;
-    }
-
-    const openaiData = await openaiRes.json();
-    const rawContent = openaiData.choices?.[0]?.message?.content || '';
-
-    let dossier;
-    try {
-      const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
-      dossier = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(rawContent);
-    } catch (e) {
-      console.error('JSON parse error:', e.message);
-      return;
-    }
-
-    // 6. Salva
-    const { error: saveErr } = await supabase
-      .from('natal_charts')
-      .update({
-        dossier_astrologico: dossier,
-        updated_at: new Date().toISOString()
-      })
-      .eq('user_id', user_id);
-
-    if (saveErr) {
-      console.error('Errore salvataggio dossier:', saveErr.message);
-    } else {
-      console.log(`✅ Dossier generato per user ${user_id}`);
-    }
-  } catch (err) {
-    console.error('Dossier error:', err.message);
   }
 }
 
@@ -470,6 +344,56 @@ app.post('/api/natal-chart', async (req, res) => {
   } catch (err) {
     console.error('Natal chart error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== TELEGRAM WEBHOOK =====
+app.post('/api/telegram-webhook', async (req, res) => {
+  try {
+    await telegramBot.handleTelegramUpdate(req.body);
+    res.sendStatus(200);
+  } catch (e) {
+    console.error('Webhook error:', e.message);
+    res.sendStatus(200); // Rispondi sempre 200 a Telegram
+  }
+});
+
+// ===== SET WEBHOOK (chiamare una volta dopo deploy) =====
+app.get('/api/set-telegram-webhook', async (req, res) => {
+  try {
+    if (!process.env.TELEGRAM_BOT_TOKEN) {
+      return res.status(500).json({ error: 'TELEGRAM_BOT_TOKEN mancante' });
+    }
+    const webhookUrl = `${req.protocol}://${req.get('host')}/api/telegram-webhook`;
+    const result = await fetch(
+      `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/setWebhook`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: webhookUrl })
+      }
+    );
+    const data = await result.json();
+    res.json({ status: 'ok', webhook_url: webhookUrl, telegram_response: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ===== CRON MANUALE: invia oroscopi (chiamare da cron esterno) =====
+app.post('/api/cron-daily-horoscope', async (req, res) => {
+  try {
+    // Verifica header cron secret se configurato
+    const cronSecret = req.headers['x-cron-secret'];
+    if (process.env.CRON_SECRET && cronSecret !== process.env.CRON_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    await telegramBot.sendDailyHoroscopes();
+    res.json({ status: 'ok', message: 'Oroscopi inviati' });
+  } catch (e) {
+    console.error('Cron error:', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 
