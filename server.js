@@ -521,22 +521,49 @@ async function saveUserReport(user_id) {
       }
     };
 
-    // 6. Upsert in user_reports
-    const { error: upsertErr } = await supabase
+    // 6. Upsert manuale (l'indice unique è parziale, upsert() non lo matcha)
+    const { data: existing, error: findErr } = await supabase
       .from('user_reports')
-      .upsert({
-        user_id: user_id,
-        report_type: 'dossier',
-        title: 'Dossier Astrologico Personale',
-        report_date: today,
-        report_data: reportData,
-        model_version: 'rule-based-v1',
-        credits_used: 0,
-        is_favorite: false
-      }, { onConflict: 'user_id, report_type, report_date' });
+      .select('id')
+      .eq('user_id', user_id)
+      .eq('report_type', 'dossier')
+      .eq('report_date', today)
+      .limit(1)
+      .single();
 
-    if (upsertErr) {
-      console.error('UserReport: errore salvataggio:', upsertErr.message);
+    let saveErr = null;
+    if (existing && !findErr) {
+      // UPDATE
+      const { error: updErr } = await supabase
+        .from('user_reports')
+        .update({
+          title: 'Dossier Astrologico Personale',
+          report_data: reportData,
+          model_version: 'rule-based-v1',
+          credits_used: 0,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existing.id);
+      saveErr = updErr;
+    } else {
+      // INSERT
+      const { error: insErr } = await supabase
+        .from('user_reports')
+        .insert({
+          user_id: user_id,
+          report_type: 'dossier',
+          title: 'Dossier Astrologico Personale',
+          report_date: today,
+          report_data: reportData,
+          model_version: 'rule-based-v1',
+          credits_used: 0,
+          is_favorite: false
+        });
+      saveErr = insErr;
+    }
+
+    if (saveErr) {
+      console.error('UserReport: errore salvataggio:', saveErr.message);
     } else {
       console.log(`✅ UserReport JSONB salvato per user ${user_id} — 4 sezioni popolate`);
     }
