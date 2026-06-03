@@ -179,7 +179,7 @@ async function generateDossier(user_id) {
       return;
     }
 
-    if (natalChart.dossier_astrologico) {
+    if (natalChart.dossier_astrologico && Object.keys(natalChart.dossier_astrologico).length > 0) {
       console.log('Dossier già esistente per user:', user_id);
       return;
     }
@@ -460,6 +460,13 @@ app.post('/api/natal-chart', async (req, res) => {
 
         if (upsertErr) {
           console.error('Errore salvataggio natal_charts:', upsertErr.message);
+        } else {
+          console.log('Natal chart salvato per user:', user_id);
+          // === NUOVO: genera dossier in background ===
+          generateDossier(user_id).catch(err => {
+            console.error('Background dossier error:', err.message);
+          });
+          // ============================================
         }
       } catch (dbErr) {
         console.error('DB error natal_charts:', dbErr.message);
@@ -841,6 +848,36 @@ app.post('/api/transits', async (req, res) => {
 // GET di test
 app.get('/api/transits', (req, res) => {
   res.json({ status: 'Transits API attivo', use: 'POST /api/transits con body { user_id }' });
+});
+
+// ===== GENERATE DOSSIER (endpoint dedicato) =====
+app.post('/api/generate-dossier', async (req, res) => {
+  try {
+    const { user_id } = req.body;
+    if (!user_id) return res.status(400).json({ error: 'user_id required' });
+
+    await generateDossier(user_id);
+
+    // Verifica salvataggio
+    const { data: chart, error } = await supabase
+      .from('natal_charts')
+      .select('dossier_astrologico')
+      .eq('user_id', user_id)
+      .single();
+
+    if (error || !chart?.dossier_astrologico) {
+      return res.status(500).json({ error: 'Dossier generation failed', details: error?.message });
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Dossier generato e salvato',
+      preview: Object.keys(chart.dossier_astrologico)
+    });
+  } catch (err) {
+    console.error('Generate-dossier endpoint error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => {
