@@ -294,6 +294,453 @@ Ogni sezione deve essere narrativa, personale, citabile in conversazione.`;
   }
 }
 
+
+// ===== DOSSIER LOCALE (rule-based, senza OpenAI) =====
+function getMCCareer(sign) {
+  const careers = {
+    'Ariete': 'leadership, impresa, sport, coraggio',
+    'Toro': 'arte, finanza, gastronomia, stabilità',
+    'Gemelli': 'comunicazione, media, tecnologia, scrittura',
+    'Cancro': 'cura, ospitalità, immobiliare, nutrimento',
+    'Leone': 'spettacolo, creatività, insegnamento, leadership',
+    'Vergine': 'salute, analisi, servizi, precisione',
+    'Bilancia': 'relazioni, design, giustizia, diplomazia',
+    'Scorpione': 'ricerca, psicologia, finanza, trasformazione',
+    'Sagittario': 'viaggi, filosofia, editoria, avventura',
+    'Capricorno': 'management, architettura, politica, struttura',
+    'Acquario': 'innovazione, tecnologia, attivismo, comunità',
+    'Pesci': 'arte, spiritualità, cura, empatia'
+  };
+  return careers[sign] || 'campi che valorizzano il tuo talento naturale';
+}
+
+function buildLocalDossier(natalChart) {
+  try {
+    const planets = natalChart.planets || [];
+    const houses = natalChart.houses || [];
+    const points = natalChart.points || {};
+
+    const asc = points.ascendant || {};
+    const mc = points.mc || {};
+    const moonSign = points.moon_sign || '';
+
+    // Mappa segni -> elementi
+    const ELEMENTS = {
+      'Ariete': 'fuoco', 'Toro': 'terra', 'Gemelli': 'aria', 'Cancro': 'acqua',
+      'Leone': 'fuoco', 'Vergine': 'terra', 'Bilancia': 'aria', 'Scorpione': 'acqua',
+      'Sagittario': 'fuoco', 'Capricorno': 'terra', 'Acquario': 'aria', 'Pesci': 'acqua'
+    };
+
+    // Conta elementi
+    const elementCount = { fuoco: 0, terra: 0, aria: 0, acqua: 0 };
+    planets.forEach(p => {
+      if (ELEMENTS[p.sign]) elementCount[ELEMENTS[p.sign]]++;
+    });
+    if (ELEMENTS[asc.name]) elementCount[ELEMENTS[asc.name]] += 2;
+    if (ELEMENTS[moonSign]) elementCount[ELEMENTS[moonSign]]++;
+
+    const dominantElement = Object.entries(elementCount).sort((a, b) => b[1] - a[1])[0][0];
+
+    const ESSENCE = {
+      fuoco: "Un'anima ardente, guidata dall'istinto e dalla passione. Porti in te una scintilla inestinguibile che contagia chi ti sta vicino.",
+      terra: "Una natura solida e pragmatica. Costruisci con pazienza, radicato nei valori reali. La stabilità è il tuo superpotere.",
+      aria: "Una mente agile e curiosa. Il mondo delle idee è il tuo territorio naturale. Vedi connessioni dove gli altri vedono solo frammenti.",
+      acqua: "Un cuore profondo e intuitivo. Percepisci ciò che gli altri non vedono. La sensibilità è il tuo radar interiore."
+    };
+
+    // Punti forti
+    const punti_forti = [];
+    const sun = planets.find(p => p.key === 'sun');
+    const moon = planets.find(p => p.key === 'moon');
+    const mars = planets.find(p => p.key === 'mars');
+    const venus = planets.find(p => p.key === 'venus');
+    const jupiter = planets.find(p => p.key === 'jupiter');
+    const mercury = planets.find(p => p.key === 'mercury');
+
+    if (sun) punti_forti.push(`Identità radiosa in ${sun.sign}: sai chi sei e non ti perdi nelle convenzioni altrui.`);
+    if (moon) punti_forti.push(`Intuizione lunare in ${moon.sign}: capisci gli altri prima che aprano bocca.`);
+    if (mars) punti_forti.push(`Azione decisa in ${mars.sign}: quando vuoi qualcosa, vai a prenderla senza mezze misure.`);
+    if (venus) punti_forti.push(`Armonia venusiana in ${venus.sign}: crei bellezza nelle relazioni e nell'ambiente che ti circonda.`);
+    if (jupiter) punti_forti.push(`Fortuna gioviana in ${jupiter.sign}: la vita ti sorride quando segui la tua vocazione con ottimismo.`);
+    if (mercury) punti_forti.push(`Mente mercuriale in ${mercury.sign}: comunici con intelligenza e adattabilità.`);
+    if (asc.name) punti_forti.push(`Ascendente in ${asc.name}: la gente percepisce subito la tua presenza autentica.`);
+
+    // Punti critici
+    const punti_critici = [];
+    const saturn = planets.find(p => p.key === 'saturn');
+    const pluto = planets.find(p => p.key === 'pluto');
+    const neptune = planets.find(p => p.key === 'neptune');
+
+    if (saturn) punti_critici.push(`Saturno in ${saturn.sign}: a volte ti pesi troppo con responsabilità e auto-critica.`);
+    if (pluto) punti_critici.push(`Plutone in ${pluto.sign}: trasformazioni intense che richiedono resilienza e accettazione del cambiamento.`);
+    if (neptune) punti_critici.push(`Nettuno in ${neptune.sign}: il confine tra realtà e sogno può essere sottile.`);
+    if (dominantElement === 'fuoco') punti_critici.push("L'impulsività può bruciare ponti prima di costruirli. Respira prima di reagire.");
+    if (dominantElement === 'acqua') punti_critici.push("L'eccessiva sensibilità può trasformarsi in vulnerabilità. Impara a filtrare.");
+    if (dominantElement === 'aria') punti_critici.push("La distrazione intellettuale può allontanarti dal cuore delle cose.");
+    if (dominantElement === 'terra') punti_critici.push("La rigidità pratica può soffocare la spontaneità. Lascia spazio all'imprevisto.");
+
+    return {
+      essenza: ESSENCE[dominantElement] || "Un'anima unica, in continua evoluzione. Ogni giorno scrivi una nuova pagina del tuo mito personale.",
+      punti_forti: punti_forti.slice(0, 6),
+      punti_critici: punti_critici.slice(0, 5),
+      amore: moonSign ? `La tua Luna in ${moonSign} cerca connessioni emotive autentiche. Non ti accontenti di superficialità: vuoi sentire, non solo vedere.` : "Cerci profondità nelle relazioni. L'amore per te è un viaggio interiore, non una destinazione.",
+      denaro: jupiter ? `Giove in ${jupiter.sign} indica opportunità di espansione materiale quando segui la tua vocazione. Il denaro arriva come conseguenza, non come obiettivo.` : "Gestisci le risorse con intuizione. Sai quando investire e quando conservare.",
+      lavoro: mc.name ? `Il tuo MC in ${mc.name} suggerisce una carriera legata a ${getMCCareer(mc.name)}. Il successo arriva quando integri il tuo vero sé nel lavoro.` : "Il lavoro ideale ti permette di esprimere il tuo vero sé. Non accontentarti di ruoli che ti stringono.",
+      carriera: mc.name ? `In ${mc.name} trovi la tua ambizione pubblica. La carriera è il palcoscenico dove il mondo vede il tuo valore.` : "La carriera è un campo di crescita personale, non solo di guadagno.",
+      salute: mars ? `Marte in ${mars.sign}: l'energia fisica è il tuo termometro. Quando stai bene, ti muovi. Quando stai male, ti blocchi.` : "Ascolta il tuo corpo, è il tuo orologio biologico più preciso.",
+      amici: `Selettivo ma leale. Dai poco, ma duri a lungo. La tua amicizia è un tesoro che pochi possiedono.`,
+      famiglia: moonSign ? `La Luna in ${moonSign} ti lega al passato e alle radici. La famiglia è il tuo ancoraggio emotivo, per bene o per male.` : "La famiglia è il tuo ancoraggio emotivo. Onora le radici, anche se voli lontano.",
+      viaggi: jupiter ? `Giove in ${jupiter.sign} ti spinge verso l'orizzonte. Ogni viaggio è un'espansione dell'anima.` : "I viaggi allargano la tua prospettiva. Cambiare aria cambia pensiero.",
+      partner: venus ? `Venere in ${venus.sign}: cerchi bellezza, armonia e autenticità nel partner. Non ti accontenti di meno.` : "Cerci un'anima gemella, non solo un compagno. Qualcuno che veda oltre la superficie.",
+      transiti_sensibili: [
+        "Osserva i transiti di Saturno: sono lezioni, non punizioni. Costruiscono ciò che dura.",
+        "Giove porta opportunità: non lasciare che la prudenza le blocchi. L'ottimismo è il tuo magnete.",
+        "La Luna Nuova è il tuo reset mensile. Pianta semi di intenzione.",
+        "I transiti di Urano richiedono flessibilità: resistere aumenta il dolore, cedere apre porte.",
+        "Plutone trasforma lentamente ma definitivamente. Abbraccia la morte del vecchio per rinascere.",
+        "Nettuno dissolve confini: la creatività fluisce, ma la confusione anche. Stai ancorato."
+      ],
+      tono_vocale: "Parla come un'amica saggia che conosce il cuore dell'utente da anni. Tono caldo, misterioso ma rassicurante. Usa metafore naturali (mare, montagne, stagioni). Non giudicare mai. Sii ironica solo quando dolce. Ricorda sempre il nome dell'utente e i dettagli del suo tema natale."
+    };
+  } catch (err) {
+    console.error('buildLocalDossier error:', err.message);
+    return {
+      essenza: "Un'anima unica in continua evoluzione.",
+      punti_forti: ["Intuizione", "Resilienza", "Autenticità"],
+      punti_critici: ["A volte ti pesi troppo"],
+      amore: "Cerci profondità nelle relazioni.",
+      denaro: "Gestisci le risorse con prudenza.",
+      lavoro: "Il lavoro ideale ti permette di esprimere il tuo vero sé.",
+      carriera: "La carriera è un campo di crescita.",
+      salute: "Ascolta il tuo corpo.",
+      amici: "Selettivo ma leale.",
+      famiglia: "Le radici sono importanti.",
+      viaggi: "I viaggi allargano la prospettiva.",
+      partner: "Cerci un'anima gemella.",
+      transiti_sensibili: ["Saturno insegna, Giove espande."],
+      tono_vocale: "Tono caldo e rassicurante."
+    };
+  }
+}
+
+// ===== USER REPORT (JSONB a 4 sezioni) =====
+async function saveUserReport(user_id) {
+  try {
+    if (!supabase) {
+      console.warn('UserReport: Supabase non disponibile');
+      return;
+    }
+
+    // 1. Leggi tema natale
+    const { data: natalChart, error: chartErr } = await supabase
+      .from('natal_charts')
+      .select('*')
+      .eq('user_id', user_id)
+      .single();
+
+    if (chartErr || !natalChart) {
+      console.error('UserReport: tema natale non trovato per user', user_id);
+      return;
+    }
+
+    // 2. Genera dossier locale
+    const dossier = buildLocalDossier(natalChart);
+
+    // 3. Leggi upcoming_events
+    const { data: upcoming, error: upErr } = await supabase
+      .from('upcoming_events')
+      .select('*')
+      .eq('user_id', user_id)
+      .order('event_date', { ascending: true })
+      .limit(3);
+
+    const top3Events = (upcoming || []).map(e => ({
+      title: e.title,
+      event_date: e.event_date,
+      event_type: e.event_type,
+      severity: e.severity,
+      description: e.description,
+      planet: e.planet,
+      target_planet: e.target_planet,
+      aspect_type: e.aspect_type
+    }));
+
+    // 4. Leggi daily_transits per oggi
+    const today = new Date().toISOString().split('T')[0];
+    const { data: daily, error: dailyErr } = await supabase
+      .from('daily_transits')
+      .select('*')
+      .eq('user_id', user_id)
+      .eq('transit_date', today)
+      .single();
+
+    // 5. Compone JSONB a 4 sezioni
+    const reportData = {
+      identikit_natale: {
+        dossier: dossier,
+        tema_natale: {
+          planets: natalChart.planets,
+          houses: natalChart.houses,
+          points: natalChart.points,
+          calculated_at: natalChart.calculated_at,
+          house_system: natalChart.house_system,
+          zodiac_type: natalChart.zodiac_type
+        },
+        generated_at: new Date().toISOString(),
+        source: 'rule-based-v1',
+        ai_generated: false
+      },
+      transiti_correnti: {
+        oggi: daily ? {
+          transit_date: daily.transit_date,
+          transit_planets: daily.transit_planets,
+          active_aspects: daily.active_aspects,
+          activated_houses: daily.activated_houses,
+          intensity_score: daily.intensity_score,
+          daily_horoscope_text: daily.daily_horoscope_text,
+          consiglio_pratico: daily.consiglio_pratico,
+          interpretation_ai: daily.interpretation_ai
+        } : {
+          status: 'not_calculated',
+          message: 'Calcola prima i transiti giornalieri via POST /api/daily-transits',
+          hint: 'Dopo il calcolo transiti, chiama /api/daily-transits per popolare questa sezione'
+        },
+        generated_at: new Date().toISOString()
+      },
+      eventi_in_arrivo: {
+        top_3: top3Events,
+        count: top3Events.length,
+        generated_at: new Date().toISOString()
+      },
+      profilo_emozionale: {
+        status: 'pending',
+        message: 'Richiede almeno 5 sessioni di chat con Luna per essere generato dall'AI',
+        sessions_needed: 5,
+        sessions_current: 0,
+        generated_at: new Date().toISOString()
+      }
+    };
+
+    // 6. Upsert in user_reports
+    const { error: upsertErr } = await supabase
+      .from('user_reports')
+      .upsert({
+        user_id: user_id,
+        report_type: 'dossier',
+        title: 'Dossier Astrologico Personale',
+        report_date: today,
+        report_data: reportData,
+        model_version: 'rule-based-v1',
+        credits_used: 0,
+        is_favorite: false
+      }, { onConflict: 'user_id, report_type, report_date' });
+
+    if (upsertErr) {
+      console.error('UserReport: errore salvataggio:', upsertErr.message);
+    } else {
+      console.log(`✅ UserReport JSONB salvato per user ${user_id} — 4 sezioni popolate`);
+    }
+  } catch (err) {
+    console.error('UserReport fatal error:', err.message);
+  }
+}
+
+// ===== DAILY TRANSITS (popola daily_transits) =====
+async function calculateAndSaveDailyTransits(user_id) {
+  try {
+    if (!supabase) {
+      console.warn('DailyTransits: Supabase non disponibile');
+      return { error: 'Database not available' };
+    }
+
+    // 1. Leggi profilo
+    const { data: profile, error: pErr } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user_id)
+      .single();
+
+    if (pErr || !profile) {
+      console.error('DailyTransits: profilo non trovato');
+      return { error: 'Profilo non trovato' };
+    }
+
+    if (!profile.birth_date || !profile.birth_latitude || !profile.birth_longitude) {
+      return { error: 'Dati di nascita incompleti' };
+    }
+
+    // 2. Parsing data e ora natale
+    const [y, m, d] = profile.birth_date.split('-').map(Number);
+    const birthTime = profile.birth_time || '12:00';
+    const timeParts = birthTime.split(':');
+    const hh = parseInt(timeParts[0]) || 12;
+    const mm = parseInt(timeParts[1]) || 0;
+
+    // 3. Timezone con DST storico
+    const tzOffset = getHistoricalOffset(profile.birth_timezone, profile.birth_date);
+    const utHour = hh - tzOffset + (mm / 60);
+    const natalJD = swisseph.swe_julday(y, m, d, utHour, swisseph.SE_GREG_CAL);
+
+    // 4. Calcolo tema natale
+    const natal = {};
+    const bodies = [
+      { key: 'sun', id: swisseph.SE_SUN },
+      { key: 'moon', id: swisseph.SE_MOON },
+      { key: 'mercury', id: swisseph.SE_MERCURY },
+      { key: 'venus', id: swisseph.SE_VENUS },
+      { key: 'mars', id: swisseph.SE_MARS },
+      { key: 'jupiter', id: swisseph.SE_JUPITER },
+      { key: 'saturn', id: swisseph.SE_SATURN },
+      { key: 'uranus', id: swisseph.SE_URANUS },
+      { key: 'neptune', id: swisseph.SE_NEPTUNE },
+      { key: 'pluto', id: swisseph.SE_PLUTO },
+    ];
+
+    for (const b of bodies) {
+      const lon = calcPlanetSync(natalJD, b.id);
+      if (lon !== null) natal[b.key] = lon;
+    }
+
+    const houseResult = calcHousesSync(natalJD, Number(profile.birth_latitude), Number(profile.birth_longitude));
+    if (!houseResult) {
+      return { error: 'Calcolo case fallito' };
+    }
+    natal.houses = houseResult.house;
+    natal.ascendant = houseResult.ascendant;
+    natal.mc = houseResult.mc;
+
+    // 5. Calcola transiti di OGGI
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+    const jdToday = swisseph.swe_julday(today.getFullYear(), today.getMonth() + 1, today.getDate(), 12, swisseph.SE_GREG_CAL);
+
+    const trans = {};
+    for (const b of bodies) {
+      const lon = calcPlanetSync(jdToday, b.id);
+      if (lon !== null) trans[b.key] = lon;
+    }
+
+    // 6. Aspetti attivi oggi vs natali
+    const ASPECTS = [
+      { name: 'congiunzione', angle: 0, orb: 3 },
+      { name: 'opposizione', angle: 180, orb: 3 },
+      { name: 'quadrato', angle: 90, orb: 3 },
+      { name: 'trigono', angle: 120, orb: 3 },
+      { name: 'sestile', angle: 60, orb: 3 },
+    ];
+
+    function angleDiff(a, b) {
+      let diff = Math.abs(a - b) % 360;
+      return diff > 180 ? 360 - diff : diff;
+    }
+
+    function getHouse(deg, houses) {
+      for (let i = 0; i < 12; i++) {
+        let start = houses[i];
+        let end = houses[(i + 1) % 12];
+        let check = deg;
+        if (start > end) { if (check < start) check += 360; end += 360; }
+        else if (start > 270 && check < 90) check += 360;
+        if (check >= start && check < end) return i + 1;
+      }
+      return 1;
+    }
+
+    const activeAspects = [];
+    const transitPlanets = [];
+    const activatedHouses = [];
+    let intensityScore = 0;
+
+    for (const [name, deg] of Object.entries(trans)) {
+      const z = toZodiac(deg);
+      const h = getHouse(deg, natal.houses);
+
+      transitPlanets.push({
+        planet: name,
+        degree: Math.round(deg * 100) / 100,
+        sign: z.name,
+        house: h,
+        symbol: z.symbol
+      });
+
+      // Case attivate
+      if (!activatedHouses.includes(h)) {
+        activatedHouses.push(h);
+      }
+
+      // Aspetti vs natali
+      for (const [nName, nDeg] of Object.entries(natal)) {
+        if (['houses', 'ascendant', 'mc'].includes(nName)) continue;
+        for (const asp of ASPECTS) {
+          const diff = angleDiff(deg, nDeg);
+          if (Math.abs(diff - asp.angle) <= asp.orb) {
+            const orbVal = Number((Math.abs(diff - asp.angle)).toFixed(2));
+            activeAspects.push({
+              transitPlanet: name,
+              natalPlanet: nName,
+              aspect: asp.name,
+              orb: orbVal,
+              severity: calcSeverity(name, nName, orbVal, asp.name)
+            });
+            intensityScore++;
+          }
+        }
+      }
+    }
+
+    // 7. Genera testo oroscopo e consiglio
+    const dominantTransits = activeAspects
+      .filter(a => a.severity === 'high')
+      .map(a => `${a.transitPlanet} ${a.aspect} ${a.natalPlanet} (orb ${a.orb}°)`);
+
+    let dailyHoroscope = `Oggi ${todayStr} il cielo presenta ${activeAspects.length} aspetti attivi.`;
+    if (dominantTransits.length > 0) {
+      dailyHoroscope += ` Transiti principali: ${dominantTransits.join(', ')}.`;
+    }
+    if (activatedHouses.length > 0) {
+      dailyHoroscope += ` Case attivate: ${activatedHouses.join(', ')}.`;
+    }
+
+    const consiglio = intensityScore > 5 
+      ? "Giornata intensa. Muoviti con consapevolezza, non lasciarti sopraffare dalle emozioni. Respira prima di ogni decisione importante."
+      : intensityScore > 2
+      ? "Giornata dinamica. Buon momento per iniziative e comunicazione. Ascolta la tua intuizione."
+      : "Giornata tranquilla. Riposa, rifletti, pianifica. La quiete è fertile.";
+
+    // 8. Salva in daily_transits
+    const { error: upsertErr } = await supabase
+      .from('daily_transits')
+      .upsert({
+        user_id: user_id,
+        transit_date: todayStr,
+        transit_planets: transitPlanets,
+        active_aspects: activeAspects,
+        activated_houses: activatedHouses,
+        intensity_score: intensityScore,
+        daily_horoscope_text: dailyHoroscope,
+        consiglio_pratico: consiglio,
+        interpretation_ai: null
+      }, { onConflict: 'user_id, transit_date' });
+
+    if (upsertErr) {
+      console.error('DailyTransits: errore salvataggio:', upsertErr.message);
+      return { error: upsertErr.message };
+    }
+
+    console.log(`✅ DailyTransits salvato per user ${user_id} — ${activeAspects.length} aspetti, intensità ${intensityScore}`);
+    return {
+      success: true,
+      transit_date: todayStr,
+      active_aspects_count: activeAspects.length,
+      intensity_score: intensityScore,
+      activated_houses: activatedHouses
+    };
+  } catch (err) {
+    console.error('DailyTransits fatal error:', err.message);
+    return { error: err.message };
+  }
+}
+
 // ===== GEOCODING =====
 app.get('/api/geocode', async (req, res) => {
   try {
@@ -467,6 +914,11 @@ app.post('/api/natal-chart', async (req, res) => {
             console.error('Background dossier error:', err.message);
           });
           // ============================================
+          // === STEP 2: genera user report JSONB in background ===
+          saveUserReport(user_id).catch(err => {
+            console.error('Background user report error:', err.message);
+          });
+          // =====================================================
         }
       } catch (dbErr) {
         console.error('DB error natal_charts:', dbErr.message);
@@ -876,6 +1328,68 @@ app.post('/api/generate-dossier', async (req, res) => {
     });
   } catch (err) {
     console.error('Generate-dossier endpoint error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== USER REPORT (endpoint dedicato) =====
+app.post('/api/user-report', async (req, res) => {
+  try {
+    const { user_id } = req.body;
+    if (!user_id) return res.status(400).json({ error: 'user_id required' });
+
+    await saveUserReport(user_id);
+
+    // Verifica
+    const { data: report, error } = await supabase
+      .from('user_reports')
+      .select('report_data')
+      .eq('user_id', user_id)
+      .eq('report_type', 'dossier')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error || !report) {
+      return res.status(500).json({ error: 'Report generation failed', details: error?.message });
+    }
+
+    res.json({
+      success: true,
+      message: 'Dossier completo generato e salvato in user_reports',
+      sections: Object.keys(report.report_data || {}),
+      preview: {
+        identikit_natale: !!report.report_data?.identikit_natale?.dossier?.essenza,
+        transiti_correnti: report.report_data?.transiti_correnti?.oggi?.status !== 'not_calculated',
+        eventi_in_arrivo: (report.report_data?.eventi_in_arrivo?.top_3 || []).length,
+        profilo_emozionale: report.report_data?.profilo_emozionale?.status
+      }
+    });
+  } catch (err) {
+    console.error('User-report endpoint error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ===== DAILY TRANSITS (endpoint dedicato) =====
+app.post('/api/daily-transits', async (req, res) => {
+  try {
+    const { user_id } = req.body;
+    if (!user_id) return res.status(400).json({ error: 'user_id required' });
+
+    const result = await calculateAndSaveDailyTransits(user_id);
+
+    if (result.error) {
+      return res.status(500).json({ error: result.error });
+    }
+
+    res.json({
+      success: true,
+      message: 'Transiti giornalieri calcolati e salvati',
+      ...result
+    });
+  } catch (err) {
+    console.error('Daily-transits endpoint error:', err);
     res.status(500).json({ error: err.message });
   }
 });
