@@ -514,7 +514,7 @@ async function saveUserReport(user_id) {
       },
       profilo_emozionale: {
         status: 'pending',
-        message: 'Richiede almeno 5 sessioni di chat con Luna per essere generato dall'AI',
+        message: "Richiede almeno 5 sessioni di chat con Luna per essere generato dall'AI",
         sessions_needed: 5,
         sessions_current: 0,
         generated_at: new Date().toISOString()
