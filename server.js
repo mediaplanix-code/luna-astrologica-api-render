@@ -1287,7 +1287,11 @@ app.post('/api/transits', async (req, res) => {
             telegram_sent: false,
             title: e.title,
             description: e.description,
-            severity: e.severity
+            severity: e.severity,
+            planet: e.planet,
+            target_planet: e.target_planet,
+            aspect_type: e.aspect_type,
+            orb_degrees: e.orb_degrees
           }));
 
           const { error: insErr } = await supabase.from('upcoming_events').insert(upcoming);
@@ -1300,6 +1304,17 @@ app.post('/api/transits', async (req, res) => {
           console.error('DB error upcoming_events:', e.message);
         }
       }
+      // === NUOVO: calcola daily transits e aggiorna user report in background ===
+      calculateAndSaveDailyTransits(user_id).then(result => {
+        if (!result.error) {
+          saveUserReport(user_id).catch(err => {
+            console.error('Background user report update error:', err.message);
+          });
+        }
+      }).catch(err => {
+        console.error('Background daily transits error:', err.message);
+      });
+      // ========================================================================
     }
 
     // 11. Risposta
