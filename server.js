@@ -526,7 +526,7 @@ async function saveUserReport(user_id) {
       .from('user_reports')
       .select('id')
       .eq('user_id', user_id)
-      .eq('report_type', 'natal')
+      .eq('report_type', 'natal_deep_dive')
       .eq('report_date', today)
       .limit(1)
       .single();
@@ -551,7 +551,7 @@ async function saveUserReport(user_id) {
         .from('user_reports')
         .insert({
           user_id: user_id,
-          report_type: 'natal',
+          report_type: 'natal_deep_dive',
           title: 'Dossier Astrologico Personale',
           report_date: today,
           report_data: reportData,
@@ -1372,7 +1372,7 @@ app.post('/api/user-report', async (req, res) => {
       .from('user_reports')
       .select('report_data')
       .eq('user_id', user_id)
-      .eq('report_type', 'natal')
+      .eq('report_type', 'natal_deep_dive')
       .order('created_at', { ascending: false })
       .limit(1)
       .single();
