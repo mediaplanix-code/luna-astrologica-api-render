@@ -21,6 +21,7 @@ app.use('/api/transits', require('./routes/transits'));
 app.use('/api/user-report', require('./routes/user-report'));
 app.use('/api/daily-transits', require('./routes/daily-transits'));
 app.use('/api/generate-dossier', require('./routes/generate-dossier'));
+app.use('/api/compatibility', require('./routes/compatibility'));
 
 // Health check
 app.get('/', (req, res) => {
