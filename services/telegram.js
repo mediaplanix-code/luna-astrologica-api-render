@@ -91,8 +91,7 @@ function generateDailyHoroscope(sign, transits, userName) {
     });
   }
 
-  text += `\n\n<b>🔮 Approfondisci sul sito →</b>\n`;
-  text += `<a href="${SITE_URL}">Entra nel tuo universo personale</a>`;
+  text += `\n\n<a href="${SITE_URL}"><b>🔮 Approfondisci sul sito →</b></a>`;
 
   return text;
 }
@@ -115,8 +114,7 @@ function generateEventsMessage(events, sign, userName) {
     text += `${e.description}\n\n`;
   });
 
-  text += `<b>🔮 Approfondisci sul sito →</b>\n`;
-  text += `<a href="${SITE_URL}">Scopri cosa ti riserva il cielo</a>`;
+  text += `<a href="${SITE_URL}"><b>🔮 Approfondisci sul sito →</b></a>`;
 
   return text;
 }
@@ -128,8 +126,7 @@ function generateBirthdayMessage(name, sign, age) {
   text += `Oggi il Sole torna esattamente dove era quando sei nato. `;
   text += `È il tuo <b>ritorno solare</b> — un nuovo anno astrologico che inizia.\n\n`;
   text += `🎁 <b>Regalo di Luna:</b> 5 crediti bonus per il tuo nuovo anno!\n\n`;
-  text += `<b>🔮 Approfondisci sul sito →</b>\n`;
-  text += `<a href="${SITE_URL}">Entra nel tuo universo</a>`;
+  text += `<a href="${SITE_URL}"><b>🔮 Approfondisci sul sito →</b></a>`;
 
   return text;
 }
@@ -213,7 +210,7 @@ async function sendUpcomingEvents() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('full_name, sun_sign, telegram_chat_id')
+        .select('id, full_name, sun_sign, telegram_chat_id')
         .eq('id', userId)
         .single();
 
@@ -288,25 +285,69 @@ async function handleTelegramWebhook(update) {
 
   console.log('Telegram message:', { chatId, text });
 
-  // Solo /start — saluto iniziale con nome utente da Supabase
-  if (text === '/start') {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('full_name, sun_sign')
-      .eq('telegram_chat_id', chatId)
-      .single();
+  // Solo /start — saluto iniziale + oroscopo immediato
+  if (text.startsWith('/start')) {
+    // Estrai user_id dal parametro /start USER_ID
+    const parts = text.split(' ');
+    const userId = parts[1] || null;
+
+    let profile = null;
+
+    if (userId) {
+      // Recupera profilo dall'user_id passato nel link
+      const { data: p, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, sun_sign')
+        .eq('id', userId)
+        .single();
+
+      if (!error && p) {
+        profile = p;
+
+        // Salva il telegram_chat_id nel profilo (prima volta)
+        await supabase
+          .from('profiles')
+          .update({ telegram_chat_id: chatId })
+          .eq('id', userId);
+      }
+    }
+
+    // Fallback: cerca per chat_id già salvato
+    if (!profile) {
+      const { data: p } = await supabase
+        .from('profiles')
+        .select('id, full_name, sun_sign')
+        .eq('telegram_chat_id', chatId)
+        .single();
+      profile = p;
+    }
 
     const userName = profile?.full_name || '';
     const sign = profile?.sun_sign || '';
     const emoji = SIGN_EMOJI[sign] || '🌙';
 
+    // === MESSAGGIO 1: BENVENUTO ===
     let welcome = `<b>${emoji} Benvenuto in Luna Astrologica!</b>\n\n`;
     if (userName) welcome += `<b>Ciao ${userName}!</b>\n`;
     welcome += `Sono Luna, la tua astrologa personale.\n`;
-    welcome += `Da oggi riceverai il tuo oroscopo quotidiano e gli eventi speciali del cielo.\n\n`;
-    welcome += `<b>🔮 Approfondisci sul sito →</b>\n`;
+    welcome += `Da oggi riceverai il tuo oroscopo quotidiano e gli eventi speciali del cielo.`;
 
     await sendTelegramMessage(chatId, welcome);
+
+    // === MESSAGGIO 2: OROSCOPO GIORNALIERO IMMEDIATO ===
+    if (profile && sign) {
+      const today = new Date().toISOString().split('T')[0];
+      const { data: daily } = await supabase
+        .from('daily_transits')
+        .select('transit_planets')
+        .eq('user_id', profile.id)
+        .eq('transit_date', today)
+        .single();
+
+      const horoscopeText = generateDailyHoroscope(sign, daily?.transit_planets, userName);
+      await sendTelegramMessage(chatId, horoscopeText);
+    }
+
     return;
   }
 
