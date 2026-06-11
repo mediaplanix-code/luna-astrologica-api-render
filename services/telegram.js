@@ -2,6 +2,7 @@
 // services/telegram.js — Integrazione Bot Telegram
 // Invia: oroscopo giornaliero, eventi, auguri compleanno
 // Gancio al sito in ogni messaggio
+// Nessuna interazione utente — solo push informativi
 // ============================================================
 
 const supabase = require('../config/supabase');
@@ -53,15 +54,19 @@ async function sendTelegramMessage(chatId, text, options = {}) {
 }
 
 // ===== GENERA OROSCOPO GIORNALIERO =====
-function generateDailyHoroscope(sign, transits) {
+function generateDailyHoroscope(sign, transits, userName) {
   const emoji = SIGN_EMOJI[sign] || '✨';
   const today = new Date().toLocaleDateString('it-IT', {
     weekday: 'long', day: 'numeric', month: 'long'
   });
 
   let text = `<b>${emoji} Oroscopo di ${today}</b>\n\n`;
-  text += `<b>Ciao, ${sign}!</b> 🌙\n\n`;
+  
+  if (userName) {
+    text += `<b>Ciao ${userName}!</b> 🌙\n\n`;
+  }
 
+  // Testo base placeholder — in futuro generato da AI con transiti reali
   const horoscopes = {
     'Ariete': 'Oggi Marte ti dà energia. È il momento di agire sui progetti rimandati.',
     'Toro': 'Venere sorride alla tua stabilità. Un gesto dolce riscalderà la giornata.',
@@ -86,16 +91,20 @@ function generateDailyHoroscope(sign, transits) {
     });
   }
 
-  text += `\n\n<b>🔮 Vuoi l\'interpretazione completa?</b>\n`;
-  text += `<a href="${SITE_URL}">Entra nel tuo universo personale →</a>`;
+  text += `\n\n<b>🔮 Approfondisci sul sito →</b>\n`;
+  text += `<a href="${SITE_URL}">Entra nel tuo universo personale</a>`;
 
   return text;
 }
 
 // ===== GENERA EVENTI IMPORTANTI =====
-function generateEventsMessage(events, sign) {
+function generateEventsMessage(events, sign, userName) {
   const emoji = SIGN_EMOJI[sign] || '✨';
   let text = `<b>${emoji} Eventi importanti in arrivo</b>\n\n`;
+
+  if (userName) {
+    text += `<b>Ciao ${userName}!</b> 🌙\n\n`;
+  }
 
   events.forEach((e, i) => {
     const date = new Date(e.event_date).toLocaleDateString('it-IT', {
@@ -106,8 +115,8 @@ function generateEventsMessage(events, sign) {
     text += `${e.description}\n\n`;
   });
 
-  text += `<b>🌙 Preparati con Luna</b>\n`;
-  text += `<a href="${SITE_URL}">Scopri cosa ti riserva il cielo →</a>`;
+  text += `<b>🔮 Approfondisci sul sito →</b>\n`;
+  text += `<a href="${SITE_URL}">Scopri cosa ti riserva il cielo</a>`;
 
   return text;
 }
@@ -119,8 +128,8 @@ function generateBirthdayMessage(name, sign, age) {
   text += `Oggi il Sole torna esattamente dove era quando sei nato. `;
   text += `È il tuo <b>ritorno solare</b> — un nuovo anno astrologico che inizia.\n\n`;
   text += `🎁 <b>Regalo di Luna:</b> 5 crediti bonus per il tuo nuovo anno!\n\n`;
-  text += `<b>🔮 Scopri cosa ti riserva questo anno:</b>\n`;
-  text += `<a href="${SITE_URL}">Entra nel tuo universo →</a>`;
+  text += `<b>🔮 Approfondisci sul sito →</b>\n`;
+  text += `<a href="${SITE_URL}">Entra nel tuo universo</a>`;
 
   return text;
 }
@@ -157,7 +166,7 @@ async function sendDailyHoroscopes() {
         .eq('transit_date', today)
         .single();
 
-      const text = generateDailyHoroscope(user.sun_sign, daily?.transit_planets);
+      const text = generateDailyHoroscope(user.sun_sign, daily?.transit_planets, user.full_name);
       const result = await sendTelegramMessage(user.telegram_chat_id, text);
 
       if (result.success) {
@@ -204,13 +213,13 @@ async function sendUpcomingEvents() {
 
       const { data: profile } = await supabase
         .from('profiles')
-        .select('sun_sign, telegram_chat_id')
+        .select('full_name, sun_sign, telegram_chat_id')
         .eq('id', userId)
         .single();
 
       if (!profile?.telegram_chat_id) continue;
 
-      const text = generateEventsMessage(topEvents, profile.sun_sign);
+      const text = generateEventsMessage(topEvents, profile.sun_sign, profile.full_name);
       const result = await sendTelegramMessage(profile.telegram_chat_id, text);
 
       if (result.success) {
@@ -270,49 +279,39 @@ async function sendBirthdayWishes() {
   }
 }
 
-// ===== WEBHOOK TELEGRAM (per ricevere messaggi) =====
+// ===== WEBHOOK TELEGRAM — SOLO /start, NESSUNA ALTRA INTERAZIONE =====
 async function handleTelegramWebhook(update) {
   if (!update.message) return;
 
   const chatId = update.message.chat.id;
   const text = update.message.text || '';
-  const username = update.message.from.username;
 
-  console.log('Telegram message:', { chatId, username, text });
+  console.log('Telegram message:', { chatId, text });
 
+  // Solo /start — saluto iniziale con nome utente da Supabase
   if (text === '/start') {
-    const welcome = `<b>🌙 Benvenuto in Luna Astrologica!</b>\n\n`;
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('full_name, sun_sign')
+      .eq('telegram_chat_id', chatId)
+      .single();
+
+    const userName = profile?.full_name || '';
+    const sign = profile?.sun_sign || '';
+    const emoji = SIGN_EMOJI[sign] || '🌙';
+
+    let welcome = `<b>${emoji} Benvenuto in Luna Astrologica!</b>\n\n`;
+    if (userName) welcome += `<b>Ciao ${userName}!</b>\n`;
     welcome += `Sono Luna, la tua astrologa personale.\n`;
-    welcome += `Per ricevere i miei messaggi, collega il tuo account Telegram dal sito.\n\n`;
-    welcome += `<a href="${SITE_URL}">Entra nel tuo universo →</a>`;
+    welcome += `Da oggi riceverai il tuo oroscopo quotidiano e gli eventi speciali del cielo.\n\n`;
+    welcome += `<b>🔮 Approfondisci sul sito →</b>\n`;
 
     await sendTelegramMessage(chatId, welcome);
     return;
   }
 
-  if (text === '/oroscopo') {
-    await sendTelegramMessage(chatId,
-      `<b>🌟 Il tuo oroscopo ti aspetta sul sito!</b>\n\n` +
-      `<a href="${SITE_URL}">Scopri le previsioni complete →</a>`
-    );
-    return;
-  }
-
-  if (text === '/eventi') {
-    await sendTelegramMessage(chatId,
-      `<b>🔮 I tuoi eventi astrologici ti aspettano!</b>\n\n` +
-      `<a href="${SITE_URL}">Vai agli eventi →</a>`
-    );
-    return;
-  }
-
-  await sendTelegramMessage(chatId,
-    `<b>🌙 Ciao!</b>\n\n` +
-    `Comandi disponibili:\n` +
-    `• /oroscopo — Vai al tuo oroscopo\n` +
-    `• /eventi — Vedi i prossimi eventi\n\n` +
-    `<a href="${SITE_URL}">Entra nel sito →</a>`
-  );
+  // Nessun altro comando — silenzio assoluto
+  // L'utente non deve interagire, riceve solo push dal sistema
 }
 
 module.exports = {
