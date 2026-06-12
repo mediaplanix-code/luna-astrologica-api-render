@@ -6,6 +6,7 @@
 // ============================================================
 
 const supabase = require('../config/supabase');
+const { calculateAndSaveDailyTransits } = require('./daily-transits');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const SITE_URL = process.env.SITE_URL || 'https://luna-astrologica.pages.dev';
@@ -53,46 +54,68 @@ async function sendTelegramMessage(chatId, text, options = {}) {
   }
 }
 
+// ===== LINK SITO CLICCABILE =====
+function getSiteLink() {
+  return `<a href="${SITE_URL}">luna-astrologica.pages.dev</a>`;
+}
+
 // ===== GENERA OROSCOPO GIORNALIERO =====
-function generateDailyHoroscope(sign, transits, userName) {
+// FIX #2: legge oroscopo personalizzato da daily_transits, fallback statico
+function generateDailyHoroscope(sign, transits, userName, dailyData = null) {
   const emoji = SIGN_EMOJI[sign] || '✨';
   const today = new Date().toLocaleDateString('it-IT', {
     weekday: 'long', day: 'numeric', month: 'long'
   });
 
   let text = `<b>${emoji} Oroscopo di ${today}</b>\n\n`;
-  
+
   if (userName) {
     text += `<b>Ciao ${userName}!</b> 🌙\n\n`;
   }
 
-  // Testo base placeholder — in futuro generato da AI con transiti reali
-  const horoscopes = {
-    'Ariete': 'Oggi Marte ti dà energia. È il momento di agire sui progetti rimandati.',
-    'Toro': 'Venere sorride alla tua stabilità. Un gesto dolce riscalderà la giornata.',
-    'Gemelli': 'Mercurio favorisce la comunicazione. Parla, scrivi, connettiti.',
-    'Cancro': 'La Luna ti avvolge. Ascolta le tue emozioni, sono la tua bussola.',
-    'Leone': 'Il Sole illumina il tuo settore creativo. Brilla senza paura.',
-    'Vergine': 'La precisione di oggi costruisce il successo di domani.',
-    'Bilancia': 'L\'armonia è il tuo superpotere. Cerca equilibrio in ogni scelta.',
-    'Scorpione': 'Profondità e intuizione ti guidano. Non temere di scavare.',
-    'Sagittario': 'L\'orizzonte chiama. Un\'avventura ti aspetta dietro l\'angolo.',
-    'Capricorno': 'La disciplina oggi è investimento per il futuro.',
-    'Acquario': 'L\'innovazione è nel tuo DNA. Sfida le convenzioni.',
-    'Pesci': 'La creatività scorre come un fiume. Lasciala fluire.'
-  };
+  // FIX #2: usa oroscopo personalizzato da daily_transits se disponibile
+  if (dailyData && dailyData.daily_horoscope_text) {
+    text += dailyData.daily_horoscope_text;
 
-  text += horoscopes[sign] || 'Il cielo oggi ha un messaggio per te. Apri il cuore e ascolta.';
+    if (dailyData.consiglio_pratico) {
+      text += `\n\n<b>💫 Consiglio di Luna:</b>\n${dailyData.consiglio_pratico}`;
+    }
 
-  if (transits && transits.length > 0) {
-    text += `\n\n<b>🌟 Transiti di oggi:</b>\n`;
-    transits.slice(0, 3).forEach(t => {
-      text += `• ${t.planet} in ${t.sign} (Casa ${t.house})\n`;
-    });
+    if (transits && transits.length > 0) {
+      text += `\n\n<b>🌟 Transiti di oggi:</b>\n`;
+      transits.slice(0, 3).forEach(t => {
+        text += `• ${t.planet} in ${t.sign} (Casa ${t.house})\n`;
+      });
+    }
+  } else {
+    // Fallback: oroscopo statico per segno (se daily_transits non esiste)
+    const horoscopes = {
+      'Ariete': 'Oggi Marte ti dà energia. È il momento di agire sui progetti rimandati.',
+      'Toro': 'Venere sorride alla tua stabilità. Un gesto dolce riscalderà la giornata.',
+      'Gemelli': 'Mercurio favorisce la comunicazione. Parla, scrivi, connettiti.',
+      'Cancro': 'La Luna ti avvolge. Ascolta le tue emozioni, sono la tua bussola.',
+      'Leone': 'Il Sole illumina il tuo settore creativo. Brilla senza paura.',
+      'Vergine': 'La precisione di oggi costruisce il successo di domani.',
+      'Bilancia': 'L\'armonia è il tuo superpotere. Cerca equilibrio in ogni scelta.',
+      'Scorpione': 'Profondità e intuizione ti guidano. Non temere di scavare.',
+      'Sagittario': 'L\'orizzonte chiama. Un\'avventura ti aspetta dietro l\'angolo.',
+      'Capricorno': 'La disciplina oggi è investimento per il futuro.',
+      'Acquario': 'L\'innovazione è nel tuo DNA. Sfida le convenzioni.',
+      'Pesci': 'La creatività scorre come un fiume. Lasciala fluire.'
+    };
+
+    text += horoscopes[sign] || 'Il cielo oggi ha un messaggio per te. Apri il cuore e ascolta.';
+
+    if (transits && transits.length > 0) {
+      text += `\n\n<b>🌟 Transiti di oggi:</b>\n`;
+      transits.slice(0, 3).forEach(t => {
+        text += `• ${t.planet} in ${t.sign} (Casa ${t.house})\n`;
+      });
+    }
   }
 
-  // ✅ LINK CLICCABILE
-  text += `\n\n<a href="${SITE_URL}"><b>🔮 Approfondisci sul sito →</b></a>`;
+  // FIX #3: link cliccabile sempre presente
+  text += `\n\n<b>🔮 Approfondisci sul sito →</b> ${getSiteLink()}`;
 
   return text;
 }
@@ -115,8 +138,7 @@ function generateEventsMessage(events, sign, userName) {
     text += `${e.description}\n\n`;
   });
 
-  // ✅ LINK CLICCABILE
-  text += `<a href="${SITE_URL}"><b>🔮 Approfondisci sul sito →</b></a>`;
+  text += `<b>🔮 Approfondisci sul sito →</b> ${getSiteLink()}`;
 
   return text;
 }
@@ -128,9 +150,7 @@ function generateBirthdayMessage(name, sign, age) {
   text += `Oggi il Sole torna esattamente dove era quando sei nato. `;
   text += `È il tuo <b>ritorno solare</b> — un nuovo anno astrologico che inizia.\n\n`;
   text += `🎁 <b>Regalo di Luna:</b> 5 crediti bonus per il tuo nuovo anno!\n\n`;
-  
-  // ✅ LINK CLICCABILE
-  text += `<a href="${SITE_URL}"><b>🔮 Approfondisci sul sito →</b></a>`;
+  text += `<b>🔮 Approfondisci sul sito →</b> ${getSiteLink()}`;
 
   return text;
 }
@@ -162,12 +182,19 @@ async function sendDailyHoroscopes() {
       const today = new Date().toISOString().split('T')[0];
       const { data: daily } = await supabase
         .from('daily_transits')
-        .select('transit_planets')
+        .select('transit_planets, daily_horoscope_text, consiglio_pratico')
         .eq('user_id', user.id)
         .eq('transit_date', today)
         .single();
 
-      const text = generateDailyHoroscope(user.sun_sign, daily?.transit_planets, user.full_name);
+      // FIX #2: passa dailyData per oroscopo personalizzato
+      const text = generateDailyHoroscope(
+        user.sun_sign,
+        daily?.transit_planets,
+        user.full_name,
+        daily
+      );
+
       const result = await sendTelegramMessage(user.telegram_chat_id, text);
 
       if (result.success) {
@@ -298,7 +325,7 @@ async function handleTelegramWebhook(update) {
     let profile = null;
 
     if (userId) {
-      // ✅ Recupera anche il gender
+      // Recupera profilo dall'user_id passato nel link
       const { data: p, error } = await supabase
         .from('profiles')
         .select('id, full_name, sun_sign, gender')
@@ -331,27 +358,58 @@ async function handleTelegramWebhook(update) {
     const gender = profile?.gender || '';
     const emoji = SIGN_EMOJI[sign] || '🌙';
 
-    // ✅ BENVENUTO/BENVENUTA in base al gender
-    const benvenuto = (gender === 'F') ? 'Benvenuta' : 'Benvenuto';
-    
+    // FIX #1 (preparato): benvenuto in base al gender
+    // Per ora: M = Benvenuto, F = Benvenuta, altro = Benvenuto/a
+    let benvenuto = 'Benvenuto';
+    if (gender === 'F') benvenuto = 'Benvenuta';
+    else if (gender === 'O') benvenuto = 'Benvenuto/a';
+
+    // === MESSAGGIO 1: BENVENUTO ===
     let welcome = `<b>${emoji} ${benvenuto} in Luna Astrologica!</b>\n\n`;
     if (userName) welcome += `<b>Ciao ${userName}!</b>\n`;
     welcome += `Sono Luna, la tua astrologa personale.\n`;
     welcome += `Da oggi riceverai il tuo oroscopo quotidiano e gli eventi speciali del cielo.`;
+
+    // FIX #3: aggiunge link "Approfondisci sul sito" nel benvenuto
+    welcome += `\n\n<b>🔮 Approfondisci sul sito →</b> ${getSiteLink()}`;
 
     await sendTelegramMessage(chatId, welcome);
 
     // === MESSAGGIO 2: OROSCOPO GIORNALIERO IMMEDIATO ===
     if (profile && sign) {
       const today = new Date().toISOString().split('T')[0];
+
+      // FIX #2: recupera anche daily_horoscope_text e consiglio_pratico
       const { data: daily } = await supabase
         .from('daily_transits')
-        .select('transit_planets')
+        .select('transit_planets, daily_horoscope_text, consiglio_pratico')
         .eq('user_id', profile.id)
         .eq('transit_date', today)
         .single();
 
-      const horoscopeText = generateDailyHoroscope(sign, daily?.transit_planets, userName);
+      // Se daily_transits non esiste per oggi, calcola al volo
+      let dailyData = daily;
+      if (!daily) {
+        console.log(`⚠️ Daily transits mancante per user ${profile.id}, calcolo al volo...`);
+        const calcResult = await calculateAndSaveDailyTransits(profile.id);
+        if (calcResult.success) {
+          const { data: fresh } = await supabase
+            .from('daily_transits')
+            .select('transit_planets, daily_horoscope_text, consiglio_pratico')
+            .eq('user_id', profile.id)
+            .eq('transit_date', today)
+            .single();
+          dailyData = fresh;
+        }
+      }
+
+      const horoscopeText = generateDailyHoroscope(
+        sign,
+        dailyData?.transit_planets,
+        userName,
+        dailyData
+      );
+
       await sendTelegramMessage(chatId, horoscopeText);
     }
 
@@ -359,6 +417,7 @@ async function handleTelegramWebhook(update) {
   }
 
   // Nessun altro comando — silenzio assoluto
+  // L'utente non deve interagire, riceve solo push dal sistema
 }
 
 module.exports = {
