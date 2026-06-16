@@ -54,13 +54,13 @@ async function sendTelegramMessage(chatId, text, options = {}) {
   }
 }
 
-// ===== LINK SITO CLICCABILE =====
+// ===== LINK SITO CLICCABILE — TESTO È IL LINK =====
 function getSiteLink() {
-  return `<a href="${SITE_URL}">luna-astrologica.pages.dev</a>`;
+  return `<a href="${SITE_URL}">🔮 Approfondisci sul sito</a>`;
 }
 
 // ===== GENERA OROSCOPO GIORNALIERO =====
-// FIX #2: legge oroscopo personalizzato da daily_transits, fallback statico
+// FIX: legge oroscopo personalizzato da daily_transits, fallback statico
 function generateDailyHoroscope(sign, transits, userName, dailyData = null) {
   const emoji = SIGN_EMOJI[sign] || '✨';
   const today = new Date().toLocaleDateString('it-IT', {
@@ -73,7 +73,7 @@ function generateDailyHoroscope(sign, transits, userName, dailyData = null) {
     text += `<b>Ciao ${userName}!</b> 🌙\n\n`;
   }
 
-  // FIX #2: usa oroscopo personalizzato da daily_transits se disponibile
+  // FIX: usa oroscopo personalizzato da daily_transits se disponibile
   if (dailyData && dailyData.daily_horoscope_text) {
     text += dailyData.daily_horoscope_text;
 
@@ -114,8 +114,8 @@ function generateDailyHoroscope(sign, transits, userName, dailyData = null) {
     }
   }
 
-  // FIX #3: link cliccabile sempre presente
-  text += `\n\n<b>🔮 Approfondisci sul sito →</b> ${getSiteLink()}`;
+  // FIX: link cliccabile come testo (non testo + link separato)
+  text += `\n\n${getSiteLink()}`;
 
   return text;
 }
@@ -138,7 +138,8 @@ function generateEventsMessage(events, sign, userName) {
     text += `${e.description}\n\n`;
   });
 
-  text += `<b>🔮 Approfondisci sul sito →</b> ${getSiteLink()}`;
+  // FIX: link cliccabile come testo
+  text += `${getSiteLink()}`;
 
   return text;
 }
@@ -150,7 +151,9 @@ function generateBirthdayMessage(name, sign, age) {
   text += `Oggi il Sole torna esattamente dove era quando sei nato. `;
   text += `È il tuo <b>ritorno solare</b> — un nuovo anno astrologico che inizia.\n\n`;
   text += `🎁 <b>Regalo di Luna:</b> 5 crediti bonus per il tuo nuovo anno!\n\n`;
-  text += `<b>🔮 Approfondisci sul sito →</b> ${getSiteLink()}`;
+  
+  // FIX: link cliccabile come testo
+  text += `${getSiteLink()}`;
 
   return text;
 }
@@ -187,7 +190,7 @@ async function sendDailyHoroscopes() {
         .eq('transit_date', today)
         .single();
 
-      // FIX #2: passa dailyData per oroscopo personalizzato
+      // FIX: passa dailyData per oroscopo personalizzato
       const text = generateDailyHoroscope(
         user.sun_sign,
         daily?.transit_planets,
@@ -358,8 +361,7 @@ async function handleTelegramWebhook(update) {
     const gender = profile?.gender || '';
     const emoji = SIGN_EMOJI[sign] || '🌙';
 
-    // FIX #1 (preparato): benvenuto in base al gender
-    // Per ora: M = Benvenuto, F = Benvenuta, altro = Benvenuto/a
+    // Preparato per gender: M = Benvenuto, F = Benvenuta, O = Benvenuto/a
     let benvenuto = 'Benvenuto';
     if (gender === 'F') benvenuto = 'Benvenuta';
     else if (gender === 'O') benvenuto = 'Benvenuto/a';
@@ -370,8 +372,8 @@ async function handleTelegramWebhook(update) {
     welcome += `Sono Luna, la tua astrologa personale.\n`;
     welcome += `Da oggi riceverai il tuo oroscopo quotidiano e gli eventi speciali del cielo.`;
 
-    // FIX #3: aggiunge link "Approfondisci sul sito" nel benvenuto
-    welcome += `\n\n<b>🔮 Approfondisci sul sito →</b> ${getSiteLink()}`;
+    // FIX: link cliccabile come testo nel benvenuto
+    welcome += `\n\n${getSiteLink()}`;
 
     await sendTelegramMessage(chatId, welcome);
 
@@ -379,7 +381,7 @@ async function handleTelegramWebhook(update) {
     if (profile && sign) {
       const today = new Date().toISOString().split('T')[0];
 
-      // FIX #2: recupera anche daily_horoscope_text e consiglio_pratico
+      // FIX: recupera anche daily_horoscope_text e consiglio_pratico
       const { data: daily } = await supabase
         .from('daily_transits')
         .select('transit_planets, daily_horoscope_text, consiglio_pratico')
